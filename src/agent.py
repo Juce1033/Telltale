@@ -150,16 +150,23 @@ def load_baseline(speed, folder="data/baselines"):
     """Healthy current and vibration at a given motor speed, from a recording made with
     logger.py --motor <speed> --outdir data/baselines. Same math as detect_live.py."""
     files = sorted(Path(folder).glob(f"*_m{speed}_*.csv"))
-    if not files:
+    for f in reversed(files):                    # newest usable recording wins
+        try:
+            df = pd.read_csv(f)
+            acc = df[["accel_x", "accel_y", "accel_z"]].to_numpy(float)
+            cur = df["current_a"].to_numpy(float)
+            if len(df) >= 500:
+                break
+        except Exception:
+            pass
+        print(f"skipping unusable baseline recording {f.name}")
+    else:
         return None
-    df = pd.read_csv(files[-1])
-    acc = df[["accel_x", "accel_y", "accel_z"]].to_numpy(float)
-    cur = df["current_a"].to_numpy(float)
     n = len(df) // 500
     vib = [float(np.sqrt(((acc[i*500:(i+1)*500] - acc[i*500:(i+1)*500].mean(0)) ** 2).mean()))
            for i in range(n)]
     return {"current_a": round(float(cur.mean()), 4), "vibration_rms": round(float(np.mean(vib)), 4),
-            "file": files[-1].name}
+            "file": f.name}
 
 
 def ratio(a, b):
@@ -285,7 +292,9 @@ def investigate(model, trigger, cfg):
     out = {"time": time.time(), "detector_fault": trigger["fault"], "diagnosis": reply,
            "actions": list(actions), "latency_s": round(time.time() - t0, 1),
            "test": test, "test_summary": summarize_test(test)}
-    OUT.write_text(json.dumps(out))
+    tmp = OUT.with_suffix(".json.tmp")           # write then swap, so the dashboard never reads half a file
+    tmp.write_text(json.dumps(out))
+    tmp.replace(OUT)
     print(f"\n=== AGENT ({out['latency_s']}s) ===\n{reply}\n")
 
 

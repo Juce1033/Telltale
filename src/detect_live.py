@@ -157,8 +157,9 @@ def run():
             "current_mean_a": round(float(arr[:, 1].mean()), 4),
             "vibration_rms": round(float(np.sqrt(((arr[:, 2:5] - arr[:, 2:5].mean(0)) ** 2).mean())), 4),
         }
-        with open("state.json", "w") as f:
-            json.dump(state, f)
+        tmp = Path("state.json.tmp")             # write then swap: readers never see a half-written file
+        tmp.write_text(json.dumps(state))
+        tmp.replace("state.json")
         print(f"{state['status']:<6}{fault:<16}score={score:6.2f}  conf={conf:.2f}  I={state['current_mean_a']:.3f}A")
 
 

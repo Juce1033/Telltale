@@ -12,6 +12,7 @@ Find the port with:  ls /dev/ttyACM* /dev/ttyUSB*
 """
 import argparse
 import csv
+import signal
 import time
 from pathlib import Path
 
@@ -40,8 +41,25 @@ def main():
     time.sleep(1.5)            # let the motor get up to speed before recording
     ser.reset_input_buffer()
 
+    # Stopped early (Ctrl+C or Cancel on the dashboard): stop the motor and delete the
+    # partial file, so a half-finished recording never ends up in training.
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
     n_rows, n_bad = 0, 0
     start = time.time()
+    try:
+        record(ser, out_path, args, start)
+    except KeyboardInterrupt:
+        ser.write(b"S0\n")
+        ser.close()
+        out_path.unlink(missing_ok=True)
+        print("Recording cancelled; motor stopped, partial file deleted.")
+        return
+    ser.write(b"S0\n")        # stop the motor when done
+    ser.close()
+
+
+def record(ser, out_path, args, start):
+    n_rows, n_bad = 0, 0
     with open(out_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["timestamp_ms", "current_a", "accel_x", "accel_y", "accel_z",
@@ -63,8 +81,6 @@ def main():
                 rate = n_rows / (time.time() - start)
                 print(f"{n_rows} rows, ~{rate:.0f} samples/s, {n_bad} bad lines")
 
-    ser.write(b"S0\n")        # stop the motor when done
-    ser.close()
     print(f"Saved {n_rows} rows to {out_path}")
 
 

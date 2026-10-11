@@ -1,12 +1,15 @@
 """
-Live dashboard server. Runs on the GX10 alongside detect_live.py and agent.py.
+Telltale dashboard + control panel. Run it from src/ (telltale.py does this for you).
 No internet, no extra packages -- just Python's standard library.
 
-    python dashboard.py                 # then open http://localhost:8080
-                                        # or http://<GX10-IP>:8080 from a laptop
+    python ../frontend/dashboard.py     # then open http://localhost:8080
 
+From the page you can:
+  Run    -- start the detector live on the ESP32 or on any recording, and stop it
+  Record -- record a labelled recording with logger.py (healthy, a fault, knocks, baseline)
+  Train  -- retrain the detector on everything in data/
 Reads:  state.json (detector, 4x/sec), agent.json (Nemotron's diagnosis)
-Writes: motor_cmd.txt (Start/Stop buttons; detect_live.py forwards it to the ESP32)
+Writes: motor_cmd.txt (motor buttons; detect_live.py forwards it to the ESP32)
 
 Fault drills: press "Mark fault created" (or Space) the moment you create a fault;
 the dashboard times how long the detector takes to flag it. Press "Mark fault cleared"
@@ -16,7 +19,11 @@ mistake. A FAULT with no drill running counts as a false alarm.
 """
 import argparse
 import collections
+import glob
 import json
+import signal
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +32,10 @@ from pathlib import Path
 STATE, AGENT, CMD = Path("state.json"), Path("agent.json"), Path("motor_cmd.txt")
 PAGE = Path(__file__).with_name("dashboard.html")
 
+PY = sys.executable
+MOTOR = 70                                       # normal running speed, set by --motor
+PROBE_SPEED = 45                                 # speed the agent's active test uses
+
 lock = threading.Lock()
 history = collections.deque(maxlen=240)          # 60 s at 4 Hz
 board = {"trials": [], "false_alarms": 0}
@@ -32,11 +43,20 @@ pending = None                                   # the injection currently being
 last_status = "OK"
 
 
+_last_good = {}
+
+
 def read_json(path):
+    """Read a JSON file; if it's mid-update, fall back to the last good copy."""
     try:
-        return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
+        data = json.loads(path.read_text())
+        _last_good[path] = data
+        return data
+    except FileNotFoundError:
+        _last_good.pop(path, None)
         return None
+    except json.JSONDecodeError:
+        return _last_good.get(path)
 
 
 def poller():
@@ -62,6 +82,110 @@ def poller():
                         board["false_alarms"] += 1
                 last_status = s["status"]
         time.sleep(0.1)
+
+
+# ---------------- control panel: the detector and one-off tasks ----------------
+class Proc:
+    """A child program whose last lines of output the page can show."""
+    def __init__(self, name, args, desc, seconds=None):
+        self.name, self.desc, self.seconds = name, desc, seconds
+        self.log = collections.deque(maxlen=40)
+        self.started = time.time()
+        self.stopped = False                     # True when stopped on purpose (Stop / Cancel)
+        self.p = subprocess.Popen([PY, "-u", *args], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                  start_new_session=True)
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self):
+        for line in self.p.stdout:
+            self.log.append(line.rstrip())
+
+    def running(self):
+        return self.p.poll() is None
+
+    def stop(self):
+        if self.running():
+            self.stopped = True
+            self.p.terminate()                   # detect_live / logger stop the motor on exit
+            try:
+                self.p.wait(timeout=6)
+            except subprocess.TimeoutExpired:
+                self.p.kill()
+
+    def info(self):
+        return {"name": self.name, "desc": self.desc, "running": self.running(),
+                "exit": self.p.poll(), "stopped": self.stopped, "elapsed": round(time.time() - self.started, 1),
+                "seconds": self.seconds, "log": list(self.log)[-25:]}
+
+
+ctl = {"detect": None, "task": None}
+ctl_lock = threading.Lock()
+
+
+def esp32_ports():
+    return sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+
+
+def recordings():
+    files = sorted(glob.glob("data/*.csv")) + sorted(glob.glob("tests/*.csv"))
+    return files
+
+
+def busy_task():
+    t = ctl["task"]
+    return t if t and t.running() else None
+
+
+def start_detect(mode, file=None):
+    if busy_task():
+        return "Wait for the current recording or training to finish."
+    if ctl["detect"]:
+        ctl["detect"].stop()
+    if mode == "live":
+        ports = esp32_ports()
+        if not ports:
+            return "No ESP32 found. Plug it into the ASUS and try again."
+        args, desc = ["--port", ports[0]], f"Live on {ports[0]}"
+    else:
+        if file not in recordings():
+            return "That recording no longer exists."
+        args, desc = ["--replay", file], f"Replaying {Path(file).name}"
+    if not Path("model.pt").exists():
+        return "No trained model yet. Record some data and press Train first."
+    ctl["detect"] = Proc("detect", ["detect_live.py", "--motor", str(MOTOR), *args], desc)
+    return None
+
+
+def start_task(kind, body):
+    if busy_task():
+        return "Something is already recording or training."
+    if ctl["detect"]:
+        ctl["detect"].stop()                     # the serial port / model file must be free
+    if kind == "train":
+        ctl["task"] = Proc("train", ["train.py"], "Training the detector")
+        return None
+    ports = esp32_ports()
+    if not ports:
+        return "No ESP32 found. Plug it into the ASUS and try again."
+    label = body.get("label", "normal")
+    secs = max(10, min(900, int(body.get("seconds", 120))))
+    args = ["logger.py", "--port", ports[0], "--seconds", str(secs)]
+    if label == "baseline":
+        args += ["--label", "normal", "--motor", str(PROBE_SPEED), "--outdir", "data/baselines"]
+        desc = f"Recording healthy at {PROBE_SPEED}% (active-test baseline)"
+    else:
+        args += ["--label", label, "--motor", str(MOTOR)]
+        desc = f"Recording {label.replace('_', ' ')}"
+    ctl["task"] = Proc("record", args, desc, seconds=secs)
+    return None
+
+
+def control_info():
+    d, t = ctl["detect"], ctl["task"]
+    return {"detect": d.info() if d else None, "task": t.info() if t else None,
+            "ports": esp32_ports(), "recordings": recordings(),
+            "motor": MOTOR, "probe_speed": PROBE_SPEED}
 
 
 def summary():
@@ -107,6 +231,7 @@ class Handler(BaseHTTPRequestHandler):
                     "agent": read_json(AGENT),
                     "history": list(history),
                     "score": summary(),
+                    "control": control_info(),
                 })
         self.send(404, {"error": "not found"})
 
@@ -114,6 +239,20 @@ class Handler(BaseHTTPRequestHandler):
         global pending
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
+        if self.path in ("/run", "/stop", "/record", "/train", "/cancel"):
+            with ctl_lock:                       # separate lock: stopping a program can take seconds
+                err = None
+                if self.path == "/run":
+                    err = start_detect(body.get("mode"), body.get("file"))
+                elif self.path == "/stop" and ctl["detect"]:
+                    ctl["detect"].stop()
+                elif self.path == "/record":
+                    err = start_task("record", body)
+                elif self.path == "/train":
+                    err = start_task("train", body)
+                elif self.path == "/cancel" and busy_task():
+                    ctl["task"].stop()
+                return self.send(409 if err else 200, {"error": err, "control": control_info()})
         with lock:
             if self.path == "/mark":
                 kind = body.get("type")
@@ -144,10 +283,23 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, summary())
 
 
+def shutdown(*_):
+    for k in ("task", "detect"):
+        if ctl[k]:
+            ctl[k].stop()
+    sys.exit(0)
+
+
 def main():
+    global MOTOR, PROBE_SPEED
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--motor", type=int, default=70, help="normal motor speed %%")
+    p.add_argument("--probe-speed", type=int, default=45, help="active-test speed %%")
     args = p.parse_args()
+    MOTOR, PROBE_SPEED = args.motor, args.probe_speed
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, shutdown)
     threading.Thread(target=poller, daemon=True).start()
     print(f"dashboard on http://localhost:{args.port}  (Ctrl+C to stop)")
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()

@@ -198,6 +198,24 @@
   .reset { margin-top: 10px; background: none; box-shadow: none; padding: 4px 0; font: 500 14px/1 var(--body);
            color: var(--ink-soft); text-decoration: underline; }
 
+  /* run / record controls */
+  select, input[type=number] { font: 500 16px/1.2 var(--body); color: var(--ink); background: var(--paper);
+           border: 1px solid var(--grid-major); border-radius: 5px; padding: 9px 10px; width: 100%; }
+  select:focus-visible, input:focus-visible { outline: 3px solid var(--pen-blue); outline-offset: 1px; }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 4px; }
+  .pair { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
+  .status-line { margin-top: 10px; font-size: 15px; }
+  .status-line.err { color: var(--pen-red); }
+  .status-line b { font-weight: 500; }
+  .meter-bar { height: 6px; background: var(--grid-minor); border-radius: 3px; overflow: hidden; margin-top: 8px; display: none; }
+  .meter-bar i { display: block; height: 100%; width: 0; background: var(--pen-blue); transition: width .3s linear; }
+  .meter-bar.on { display: block; }
+  pre.log { margin: 10px 0 0; max-height: 190px; overflow: auto; font: 12px/1.45 ui-monospace, Consolas, monospace;
+            background: var(--glass); color: #c9d2cc; padding: 8px 10px; border-radius: 4px; display: none; white-space: pre-wrap; }
+  pre.log.on { display: block; }
+  button.go { color: #0f2a14; background: linear-gradient(#9fe0a8, #6fc27b); box-shadow: 0 2px 0 #3f7d48, 0 3px 6px rgba(0,0,0,.18); }
+
   @media (max-width: 1000px) {
     .console { grid-template-columns: 1fr; padding: 0 16px 16px; }
     .plate { padding: 14px 16px 10px; }
@@ -228,12 +246,25 @@
       <div class="recorder empty" id="recorder">
         <canvas id="strip"></canvas>
         <div class="nodata"><div><b>No signal from the detector</b>
-          Start detect_live.py, and check the ESP32 cable if it's running live.</div></div>
+          Pick a source under Run and press Start.</div></div>
       </div>
     </div>
   </section>
 
   <aside class="side">
+    <div class="card" id="runcard">
+      <h2>Run</h2>
+      <div class="field">
+        <label for="src">What the detector watches</label>
+        <select id="src"></select>
+      </div>
+      <div class="controls">
+        <button class="go" id="b-go">Start</button>
+        <button id="b-halt">Stop</button>
+      </div>
+      <div class="status-line" id="run-status">Not running.</div>
+    </div>
+
     <div class="card ticket" id="ticket">
       <h2>Maintenance agent</h2>
       <div id="ticket-body" class="empty">Nemotron reviews each fault the detector raises and writes it up here.</div>
@@ -262,6 +293,35 @@
       </div>
       <div class="keys"><kbd>Space</kbd> marks a fault, <kbd>C</kbd> marks it cleared, <kbd>Esc</kbd> cancels a drill.</div>
       <button class="reset" id="b-reset">Reset drill results</button>
+    </div>
+
+    <div class="card" id="recard">
+      <h2>Record and train</h2>
+      <div class="pair">
+        <div class="field">
+          <label for="rec-label">Recording</label>
+          <select id="rec-label">
+            <option value="normal">Healthy running</option>
+            <option value="loose_fastener">Loose fastener</option>
+            <option value="belt_slip">Belt slip</option>
+            <option value="stall">Stall</option>
+            <option value="disturbance">External knocks</option>
+            <option value="baseline">Healthy at test speed</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="rec-secs">Seconds</label>
+          <input id="rec-secs" type="number" min="10" max="900" step="10" value="120">
+        </div>
+      </div>
+      <div class="note" id="rec-hint"></div>
+      <div class="controls" style="margin-top:10px">
+        <button id="b-rec">Record</button>
+        <button id="b-train">Train</button>
+      </div>
+      <div class="status-line" id="task-status"></div>
+      <div class="meter-bar" id="task-bar"><i></i></div>
+      <pre class="log" id="task-log"></pre>
     </div>
   </aside>
 </div>
@@ -450,6 +510,89 @@ function renderDrills(sc) {
       <td class="t">${t.detect_s == null ? "–" : t.detect_s.toFixed(2) + " s"}</td></tr>`).reverse().join("");
 }
 
+// ---------- run / record / train ----------
+const HINTS = {
+  normal: "Rig assembled and tight. Keep hands off the bench while it records.",
+  loose_fastener: "Loosen the bearing-block thumb screw a couple of turns first, then press Record.",
+  belt_slip: "Release the belt tension at the slotted motor mount first, then press Record.",
+  stall: "Hold a gentle, steady brake on the output for the whole recording. Keep current under about 0.75 A.",
+  disturbance: "Machine healthy. Knock, tap and bump the table (not the rig) on and off the whole time.",
+  baseline: "Machine healthy. Records at the active-test speed so the agent knows what healthy looks like there.",
+};
+let srcSig = "", lastErr = { run: null, task: null };
+function showHint() { $("rec-hint").textContent = HINTS[$("rec-label").value] || ""; }
+$("rec-label").onchange = showHint; showHint();
+
+function renderControl(c) {
+  // source list: rebuild only when it changes, so an open dropdown isn't reset
+  const sig = JSON.stringify([c.ports, c.recordings]);
+  if (sig !== srcSig) {
+    const keep = $("src").value;
+    const live = c.ports.length ? `<option value="live">Live: ESP32 on ${esc(c.ports[0])}</option>`
+                                : `<option value="live" disabled>Live: no ESP32 connected</option>`;
+    const recs = c.recordings.map(f => `<option value="${esc(f)}">${esc(f.replace(/^data\//, "").replace(/^tests\//, "test: "))}</option>`).join("");
+    $("src").innerHTML = live + (recs ? `<optgroup label="Recordings">${recs}</optgroup>` : "");
+    if ([...$("src").options].some(o => o.value === keep && !o.disabled)) $("src").value = keep;
+    srcSig = sig;
+  }
+  const d = c.detect, t = c.task;
+  const rs = $("run-status");
+  if (lastErr.run) { rs.className = "status-line err"; rs.textContent = lastErr.run; }
+  else if (d && d.running) { rs.className = "status-line"; rs.innerHTML = `<b>Running:</b> ${esc(d.desc)}`; }
+  else if (d && d.stopped) { rs.className = "status-line"; rs.textContent = "Stopped."; }
+  else if (d && d.exit === 0) { rs.className = "status-line"; rs.textContent = `Finished: ${d.desc.replace("Replaying", "replay of")}.`; }
+  else if (d && d.exit !== null && d.exit !== 0) {
+    rs.className = "status-line err"; rs.textContent = `Stopped with an error: ${d.log.slice(-1)[0] || "see the terminal"}`;
+  } else { rs.className = "status-line"; rs.textContent = "Not running."; }
+
+  const busy = t && t.running;
+  $("b-rec").textContent = busy && t.name === "record" ? "Cancel" : "Record";
+  $("b-train").textContent = busy && t.name === "train" ? "Training…" : "Train";
+  $("b-train").disabled = busy;
+  $("b-go").disabled = busy;
+  const ts = $("task-status"), bar = $("task-bar"), log = $("task-log");
+  if (lastErr.task) { ts.className = "status-line err"; ts.textContent = lastErr.task; }
+  else if (!t) { ts.textContent = ""; }
+  else if (busy) {
+    ts.className = "status-line";
+    ts.innerHTML = `<b>${esc(t.desc)}…</b>` + (t.seconds ? ` ${Math.min(t.seconds, Math.floor(t.elapsed))} of ${t.seconds} s` : "");
+  } else if (t.stopped) {
+    ts.className = "status-line"; ts.textContent = "Cancelled. Nothing was saved.";
+  } else if (t.exit === 0) {
+    ts.className = "status-line";
+    ts.textContent = t.name === "train" ? "Training finished. Press Start to use the new model." : "Recording saved.";
+  } else { ts.className = "status-line err"; ts.textContent = "That didn't finish. Details below."; }
+  bar.classList.toggle("on", !!(busy && t.seconds));
+  if (busy && t.seconds) bar.querySelector("i").style.width = `${Math.min(100, 100 * t.elapsed / (t.seconds + 4))}%`;
+  const showLog = t && (t.name === "train" || (!busy && !t.stopped && t.exit !== 0));
+  log.classList.toggle("on", !!showLog);
+  if (showLog) {
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+    log.textContent = t.log.join("\n");
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+}
+
+async function control(path, body, slot) {
+  lastErr[slot] = null;
+  try {
+    const r = await (await fetch(path, { method: "POST", body: JSON.stringify(body || {}) })).json();
+    lastErr[slot] = r.error || null;
+  } catch (e) { lastErr[slot] = "Couldn't reach the server."; }
+  if (lastErr[slot]) setTimeout(() => { lastErr[slot] = null; }, 6000);
+}
+$("b-go").onclick = () => {
+  const v = $("src").value;
+  if (!v) return;
+  control("/run", v === "live" ? { mode: "live" } : { mode: "replay", file: v }, "run");
+};
+$("b-halt").onclick = () => control("/stop", {}, "run");
+$("b-rec").onclick = () => {
+  if ($("b-rec").textContent === "Cancel") return control("/cancel", {}, "task");
+  control("/record", { label: $("rec-label").value, seconds: +$("rec-secs").value || 120 }, "task");
+};
+$("b-train").onclick = () => control("/train", {}, "task");
+
 // ---------- loop ----------
 function render(d) {
   const s = d.state, stale = d.stale || !s;
@@ -465,6 +608,7 @@ function render(d) {
   drawStrip(d.history, d.now);
   renderTicket(d.agent, d.now, stale ? null : s);
   renderDrills(d.score);
+  if (d.control) renderControl(d.control);
 }
 
 async function poll() {
@@ -480,6 +624,7 @@ $("b-run").onclick   = () => post("/motor", { percent: 70 });
 $("b-stop").onclick  = () => post("/motor", { percent: 0 });
 $("b-reset").onclick = () => confirm("Clear all drill results?") && post("/reset");
 document.addEventListener("keydown", e => {
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
   if (e.target.tagName === "BUTTON" && e.code === "Space") return;
   if (e.code === "Space") { e.preventDefault(); post("/mark", { type: "inject" }); }
   if (e.key === "c" || e.key === "C") post("/mark", { type: "clear" });

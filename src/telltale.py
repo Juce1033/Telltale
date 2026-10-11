@@ -1,22 +1,25 @@
 """
-Starts the whole Telltale system with one command, and stops it all with Ctrl+C.
+Starts Telltale: the dashboard (which is also the control panel) and Nemotron.
+Everything else -- running live or on a recording, recording data, training --
+is done from the page at http://localhost:8080.
 
-    python telltale.py                    # live: finds the ESP32, starts everything
-    python telltale.py --replay data/loose_fastener_m70_214501.csv   # no hardware
-    python telltale.py --retrain          # retrain on data/ first, then start
+    python telltale.py                    # then pick a source on the page
+    python telltale.py --live             # also start the detector on the ESP32 right away
+    python telltale.py --replay data/normal_205808.csv
 
-Order: dashboard -> agent (waits until Nemotron is loaded) -> detector.
-Ctrl+C (or closing the window) stops all three and the motor.
-Run it from src/, with the venv active. Dashboard: http://localhost:8080
+Ctrl+C (or closing the window) stops everything, including the motor.
+Run it from src/, with the venv active.
 """
 import argparse
 import glob
+import json
 import os
 import signal
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -91,56 +94,58 @@ def stop_all(*_):
     os._exit(0)
 
 
+def post(path, body):
+    req = urllib.request.Request("http://localhost:8080" + path, json.dumps(body).encode(),
+                                 {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read())
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--replay", help="run on a recorded CSV instead of the ESP32")
-    ap.add_argument("--port", help="serial port (default: auto-detect)")
+    ap.add_argument("--replay", help="start straight away on this recording")
+    ap.add_argument("--live", action="store_true", help="start straight away on the ESP32")
     ap.add_argument("--motor", type=int, default=70, help="normal motor speed %% (match your recordings)")
-    ap.add_argument("--retrain", action="store_true", help="retrain on data/ before starting")
+    ap.add_argument("--probe-speed", type=int, default=45, help="active-test speed %%")
     ap.add_argument("--no-agent", action="store_true", help="skip Nemotron")
     args = ap.parse_args()
 
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, stop_all)
 
-    if args.retrain or not (HERE / "model.pt").exists():
-        print("training the detector...", flush=True)
-        if subprocess.call([PY, "train.py"], cwd=HERE) != 0:
-            sys.exit("training failed; see the output above.")
-
-    if args.replay and not Path(args.replay).exists() and not (HERE / args.replay).exists():
-        sys.exit(f"No such recording: {args.replay}")
-    port = None if args.replay else (args.port or find_port())
-
-    start("dashboard", [str(find_dashboard())], ready_text="dashboard on")
-    print("dashboard ready: http://localhost:8080", flush=True)
+    # The dashboard is the control panel: it starts and stops the detector, records and trains.
+    start("dashboard", [str(find_dashboard()), "--motor", str(args.motor),
+                        "--probe-speed", str(args.probe_speed)], ready_text="dashboard on")
+    print("control panel ready: http://localhost:8080", flush=True)
 
     if not args.no_agent:
         if not ollama_up():
             print("warning: Ollama isn't answering on port 11434. Try: ollama serve", flush=True)
         print("loading Nemotron (first time can take a minute)...", flush=True)
         start("agent", ["agent.py", "--base-speed", str(args.motor),
-                        *(["--probe", "off"] if args.replay else [])],
-              ready_text="agent watching")
+                        "--probe-speed", str(args.probe_speed)], ready_text="agent watching")
 
-    detect = ["detect_live.py", "--motor", str(args.motor)]
-    detect += ["--replay", args.replay] if args.replay else ["--port", port]
-    start("detect", detect, quiet_repeats=True)
-    print(f"running ({'replay: ' + args.replay if args.replay else 'live on ' + port}). "
-          "Ctrl+C stops everything, including the motor.", flush=True)
+    if args.replay or args.live:
+        r = post("/run", {"mode": "live" if args.live else "replay", "file": args.replay})
+        print(r.get("error") or "detector started.", flush=True)
+    print("ready. Use the page to run, record and train. Ctrl+C here stops everything.", flush=True)
 
-    while True:                                     # if any part crashes, shut the rest down
+    while True:                                     # if a core part crashes, shut the rest down
         time.sleep(1)
         for name, p in list(procs):
-            if p.poll() is None:
-                continue
-            if name == "detect" and args.replay and p.returncode == 0:
-                print("replay finished. The dashboard stays up; Ctrl+C to stop.", flush=True)
-                procs.remove((name, p))
-                continue
-            print(f"{name} exited (code {p.returncode}).", flush=True)
-            stop_all()
+            if p.poll() is not None:
+                print(f"{name} exited (code {p.returncode}).", flush=True)
+                stop_all()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as e:                       # a startup step failed: don't leave parts running
+        if procs:
+            print(e, flush=True)
+            stop_all()
+        raise
