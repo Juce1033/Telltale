@@ -390,7 +390,7 @@ function drawStrip(hist, now) {
   const g = cv.getContext("2d");
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
-  const span = 60, left = 58, right = 12, top = 10, gap = 14;
+  const span = 60, left = 58, right = 74, top = 10, gap = 14;
   const laneH = (H - top - 26 - gap * (LANES.length - 1)) / LANES.length;
   const X = t => left + (W - left - right) * (1 - (now - t) / span);
 
@@ -402,6 +402,7 @@ function drawStrip(hist, now) {
   }
   g.fillStyle = cssv("--ink-soft"); g.font = "600 13px Barlow Condensed, sans-serif";
   g.textAlign = "right"; g.fillText("now", W - right, H - 8);
+  g.textAlign = "left"; g.fillText("value now", W - right + 8, H - 8);
   g.textAlign = "left"; g.fillText("60 seconds ago", left, H - 8);
 
   LANES.forEach((ln, i) => {
@@ -439,14 +440,22 @@ function drawStrip(hist, now) {
       g.strokeStyle = cssv("--pen-red"); g.setLineDash([6, 4]); g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(left, Y(ln.alarm)); g.lineTo(W - right, Y(ln.alarm)); g.stroke();
       g.setLineDash([]);
-      g.fillStyle = cssv("--pen-red"); g.textAlign = "right"; g.font = "600 13px Barlow Condensed, sans-serif";
-      g.fillText("alarm line", W - right - 4, Y(ln.alarm) - 5);
+      g.fillStyle = cssv("--pen-red"); g.textAlign = "left"; g.font = "600 13px Barlow Condensed, sans-serif";
+      g.fillText(`alarm ${ln.alarm.toFixed(1)}`, W - right + 8, Y(ln.alarm) + 4);
     }
 
     g.save(); g.beginPath(); g.rect(left, y0, W - left - right, laneH); g.clip();
     g.strokeStyle = cssv(ln.pen); g.lineWidth = 2.2; g.lineJoin = "round"; g.beginPath();
     hist.forEach((h, j) => { const x = X(h.t), y = Y(h[ln.key]); j ? g.lineTo(x, y) : g.moveTo(x, y); });
     g.stroke(); g.restore();
+
+    // latest value, in the right gutter beside the end of the trace
+    if (hist.length) {
+      const v = hist[hist.length - 1][ln.key];
+      const y = Math.min(y1 - 2, Math.max(y0 + 12, Y(v) + 5));
+      g.fillStyle = cssv(ln.pen); g.textAlign = "left"; g.font = "700 16px Barlow Condensed, sans-serif";
+      g.fillText(v.toFixed(ln.dec === 1 ? 2 : ln.dec), W - right + 8, y);
+    }
   });
 }
 
@@ -492,8 +501,11 @@ function renderTicket(a, now, s) {
   const agoText = ago < 90 ? `${ago} s ago` : `${Math.round(ago / 60)} min ago`;
   html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${agoText}</div>`;
   // once the machine is healthy again, the last report is history, not a live alarm
-  const resolved = s && (s.status === "OK" || s.status === "NOTICE");
-  if (resolved) html = `<div class="past-label">Previous fault. The machine is running normally now.</div>` + html;
+  const healthy = s && (s.status === "OK" || s.status === "NOTICE");
+  const idle = !s;                               // nothing running
+  const resolved = healthy || idle;
+  if (healthy) html = `<div class="past-label">Previous fault. The machine is running normally now.</div>` + html;
+  else if (idle) html = `<div class="past-label">From the last run.</div>` + html;
   const body = $("ticket-body");
   body.className = resolved ? "past" : ""; body.innerHTML = html;
 }
@@ -626,6 +638,9 @@ async function poll() {
   catch (e) { renderAnnunciator(null, true); $("recorder").classList.add("empty"); }
   setTimeout(poll, 250);
 }
+// buttons don't keep keyboard focus after a click, so Space can't re-trigger them
+document.addEventListener("mouseup", e => { if (e.target.closest("button")) e.target.closest("button").blur(); });
+document.addEventListener("keyup", e => { if (e.code === "Space" && e.target.tagName === "BUTTON") e.preventDefault(); }, true);
 const post = (path, body = {}) => fetch(path, { method: "POST", body: JSON.stringify(body) });
 let timing = false;
 $("b-mark").onclick  = () => post("/mark", { type: timing ? "cancel" : "inject" });
@@ -635,7 +650,7 @@ $("b-stop").onclick  = () => post("/motor", { percent: 0 });
 $("b-reset").onclick = () => confirm("Clear all drill results?") && post("/reset");
 document.addEventListener("keydown", e => {
   if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
-  if (e.target.tagName === "BUTTON" && e.code === "Space") return;
+  // Space is the drill key everywhere, so it must not also "press" whichever button has focus
   if (e.code === "Space") { e.preventDefault(); post("/mark", { type: "inject" }); }
   if (e.key === "c" || e.key === "C") post("/mark", { type: "clear" });
   if (e.key === "Escape") post("/mark", { type: "cancel" });
