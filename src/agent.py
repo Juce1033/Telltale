@@ -70,8 +70,10 @@ Your job when a fault is flagged:
    The detector judges the full frequency pattern, not just overall RMS: a confident detector guess
    (confidence above 0.7) with nothing contradicting it (e.g. current unchanged for a loose
    fastener) should be reported as that fault, not as uncertain.
-3. If it is a stall with current above 0.6 A and the motor is still running, stop it. For other
-   faults, do not stop the motor unless the evidence shows something dangerous.
+3. Do NOT stop the motor yourself for a stall: once a second reviewer confirms your stall
+   diagnosis, the system stops the motor automatically. In ACTION for a stall, say the motor is
+   being stopped and what to check (what is braking the output). For other faults, do not stop
+   the motor unless the evidence shows something dangerous.
 4. Reply in exactly this format, short, for an operator glancing at a screen:
 FAULT: <name> (<your confidence: high/medium/low>)
 EVIDENCE: <one sentence citing the actual numbers>
@@ -435,7 +437,12 @@ def investigate(model, trigger, cfg):
     t0 = time.time()
     actions.clear()
     test = None
-    if cfg["probe"] == "auto" and trigger.get("source") == "live":
+    stall = trigger["fault"] == "stall"
+    if stall and (trigger.get("current_mean_a") or 0) > SAFETY_STOP_A:
+        # past the danger line: protect the motor and driver now, don't wait for two AI calls
+        send_motor("S0", f"safety stop: current {trigger['current_mean_a']} A is above {SAFETY_STOP_A} A")
+    if cfg["probe"] == "auto" and trigger.get("source") == "live" and not stall:
+        # (no active test for a stall: changing speed while the output is braked tells us nothing)
         print(f"  [active test] {cfg['base_speed']}% -> {cfg['probe_speed']}% -> {cfg['base_speed']}%")
         baseline = load_baseline(cfg["probe_speed"])     # re-read: it may have been recorded since startup
         test = run_active_test(trigger, cfg["base_speed"], cfg["probe_speed"], baseline)
@@ -493,6 +500,13 @@ def investigate(model, trigger, cfg):
         else:
             print(f"  [review] {rev['status']}")
         rev["latency_s"] = round(time.time() - t1, 1)
+
+    # ---- stall confirmed by both agents -> stop the motor
+    confirmed = rev is None or rev["status"] in ("approved", "revised")
+    if named_fault(reply) == "stall" and confirmed and not any(a.startswith("S0") for a in actions):
+        send_motor("S0", "stall confirmed by the reviewer" if rev else "stall diagnosed")
+    elif named_fault(reply) == "stall" and not confirmed:
+        print("  [stall] reviewer disputes the diagnosis: motor left running for the operator to decide")
 
     out = {"time": time.time(), "detector_fault": trigger["fault"], "diagnosis": reply,
            "actions": list(actions), "latency_s": round(time.time() - t0, 1),

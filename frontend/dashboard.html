@@ -365,7 +365,7 @@ function renderAnnunciator(s, stale) {
   const probs = (s && s.class_probs) || {};
   const keys = [...ORDER.filter(k => k in probs || k === "normal"),
                 ...Object.keys(probs).filter(k => !ORDER.includes(k))];
-  if (s && s.status === "FAULT" && !keys.includes(s.fault)) keys.push(s.fault);
+  if (s && (s.status === "FAULT" || s.status === "STOPPED") && s.fault !== "normal" && !keys.includes(s.fault)) keys.push(s.fault);
   const ann = $("ann");
   ann.style.setProperty("--tiles", keys.length);
   ann.innerHTML = keys.map(k => {
@@ -375,10 +375,13 @@ function renderAnnunciator(s, stale) {
       if (s.status === "FAULT" && k === s.fault) cls += " lit-alarm" + (s.fault_active_s < 4 ? " flash" : "");
       if (s.status === "NOTICE" && k === s.fault) cls += " lit-info";
       if (s.status === "PROBE" && k === s.fault) cls += " lit-alarm";
+      if (s.status === "STOPPED" && k === s.fault && k !== "normal") cls += " lit-alarm";
     }
     const p = Math.round((probs[k] || 0) * 100);
     const testing = s && s.status === "PROBE" && k === s.fault;
-    const sub = testing ? `Testing at ${(s.probe && s.probe.speed) || "low"}% speed…` : why(k);
+    const halted = s && s.status === "STOPPED" && k === s.fault && k !== "normal";
+    const sub = testing ? `Testing at ${(s.probe && s.probe.speed) || "low"}% speed…`
+              : halted ? "Motor stopped for safety" : why(k);
     return `<div class="${cls}" title="Classifier likelihood ${p}%">
       <div class="name">${title(k)}</div><div class="why">${sub}</div>
       <div class="lk"><i style="width:${stale ? 0 : p}%"></i></div></div>`;
@@ -452,8 +455,8 @@ function drawStrip(hist, now) {
 
     // fault periods: a wash of amber on the paper
     hist.forEach((h, j) => {
-      if (h.status !== "FAULT" && h.status !== "PROBE") return;
-      g.fillStyle = h.status === "FAULT" ? cssv("--wash") : cssv("--wash-test");
+      if (h.status !== "FAULT" && h.status !== "PROBE" && !(h.status === "STOPPED" && h.fault !== "normal")) return;
+      g.fillStyle = h.status === "PROBE" ? cssv("--wash-test") : cssv("--wash");
       // each reading covers until the next one (at most half a second), never past the data
       const tEnd = j + 1 < hist.length ? Math.min(hist[j + 1].t, h.t + 0.5) : h.t + 0.25;
       const xa = Math.max(left, X(h.t)), xb = Math.min(W - right, X(tEnd));
@@ -509,7 +512,7 @@ function renderTicket(a, now, s) {
     reviewing:  ["Second Agent Is Reviewing", "A second Nemotron is checking the diagnosis against the raw numbers."],
     revising:   ["Sent Back for a Fix", "The reviewer found a problem. The first agent is correcting its diagnosis."],
   };
-  if (a && a.stage && !a.diagnosis && s && s.status === "FAULT") {
+  if (a && a.stage && !a.diagnosis && s && (s.status === "FAULT" || s.status === "STOPPED")) {
     const [h, t] = STAGES[a.stage] || ["Working", ""];
     ticketKey = null;
     $("ticket-body").className = "";

@@ -47,14 +47,15 @@ def read_probe():
 
 
 def forward_motor_cmd():
-    """The agent writes e.g. 'S0' to motor_cmd.txt; pass it to the ESP32."""
+    """The agent writes e.g. 'S0' to motor_cmd.txt; pass it to the ESP32. Returns the command."""
     if not CMD_FILE.exists():
-        return
+        return None
     cmd = CMD_FILE.read_text().strip()
     CMD_FILE.unlink()
     if SER:
         SER.write((cmd + "\n").encode())
     print(f">>> motor command {cmd}" + ("" if SER else " (replay mode: not sent)"))
+    return cmd
 
 
 def serial_rows(port, baud, motor):
@@ -113,13 +114,22 @@ def run():
     probe_seen, hold_until, suspect = False, 0.0, None
     settle_s = WIN / FS + HOP / FS             # time for the window to refill after a speed change
     source = "replay" if args.replay else "live"
+    motor_off, stopped_for = False, "normal"   # live only: motor stopped on purpose (stall stop, Stop button)
+    restart_at = None                          # after a restart, stay "stopped" until spin-up + window refill
     for row in rows:
         buf.append(row)
         since_hop += 1
         if len(buf) < WIN or since_hop < HOP:
             continue
         since_hop = 0
-        forward_motor_cmd()
+        cmd = forward_motor_cmd()
+        if cmd and source == "live" and cmd[:1] in "Ss" and cmd[1:].strip().isdigit():
+            if int(cmd[1:]) == 0 and not read_probe():
+                motor_off, streak, restart_at = True, 0, None
+            elif motor_off and int(cmd[1:]) > 0:          # restarted: spin up and refill the window first
+                restart_at = time.time() + 1.0 + settle_s
+        if motor_off and restart_at and time.time() > restart_at:
+            motor_off, restart_at, streak, fault_start = False, None, 0, None
 
         x = torch.tensor((featurize(np.array(buf)) - mu) / sd, dtype=torch.float32)[None]
         with torch.no_grad():
@@ -134,7 +144,10 @@ def run():
             probe_seen, hold_until = False, time.time() + settle_s
         testing = probe is not None or time.time() < hold_until
 
-        if testing:
+        if motor_off:
+            # stopped on purpose: zero current is expected, not a new fault. Keep showing why.
+            fault, conf, streak = stopped_for, 0.0, 0
+        elif testing:
             fault, conf = suspect or "unknown_anomaly", 0.0
             streak = CONFIRM - 1               # after the test, one abnormal window re-confirms at once
         elif (streak := streak + 1 if score > 1 else 0) >= CONFIRM:
@@ -151,9 +164,11 @@ def run():
         else:
             fault, conf, fault_start = "normal", float(probs[classes.index("normal")]), None
 
+        if not motor_off:
+            stopped_for = fault if fault not in ("normal",) and fault not in NOTICES else "normal"
         state = {
             "time": time.time(),
-            "status": "PROBE" if testing else
+            "status": "STOPPED" if motor_off else "PROBE" if testing else
                       ("OK" if fault == "normal" else ("NOTICE" if fault in NOTICES else "FAULT")),
             "probe": probe,
             "source": source,

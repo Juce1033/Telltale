@@ -72,7 +72,7 @@ def poller():
             with lock:
                 history.append({"t": s["time"], "cur": s["current_mean_a"],
                                 "vib": s["vibration_rms"], "score": s["anomaly_score"],
-                                "status": s["status"]})
+                                "status": s["status"], "fault": s.get("fault")})
                 # a new fault = healthy (or a knock) turning into a fault; returning from an
                 # active test with the fault still present is the same fault, not a new one
                 if s["status"] == "FAULT" and last_status in ("OK", "NOTICE"):
