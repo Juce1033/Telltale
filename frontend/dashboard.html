@@ -123,7 +123,7 @@
                  background: #1d2120; padding: 8px; border-radius: 4px; }
   .tile { position: relative; background: var(--glass); color: var(--glass-text);
           border-radius: 2px; min-height: 112px; padding: 14px 14px 22px;
-          display: flex; flex-direction: column; justify-content: center;
+          display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;
           box-shadow: inset 0 0 0 1px rgba(255,255,255,.04); }
   .tile .name { font: 700 clamp(22px, 2.3vw, 32px)/1.02 var(--cond); }
   .tile .why { font-size: 13px; margin-top: 6px; color: inherit; opacity: .85; }
@@ -151,7 +151,7 @@
 
   /* ---------- strip chart ---------- */
   .recorder { background: var(--paper); border-radius: 3px; position: relative; }
-  .recorder canvas { display: block; width: 100%; height: 430px; }
+  .recorder canvas { display: block; width: 100%; height: 500px; }
   .recorder .nodata { position: absolute; inset: 0; display: none; place-items: center; text-align: center;
                       padding: 24px; color: var(--ink-soft); }
   .recorder .nodata b { display: block; font: 700 28px/1.1 var(--cond); color: var(--ink); margin-bottom: 6px; }
@@ -239,9 +239,9 @@
     <div class="bezel"><div class="annunciator" id="ann" aria-live="polite"></div></div>
 
     <div class="bezel meters">
-      <div class="meter" id="m-cur"><div class="v">–</div><div class="k">Motor current</div></div>
+      <div class="meter" id="m-cur"><div class="v">–</div><div class="k">Motor Current</div></div>
       <div class="meter" id="m-vib"><div class="v">–</div><div class="k">Vibration</div></div>
-      <div class="meter" id="m-score"><div class="v">–</div><div class="k">Anomaly score (alarm at 1.0)</div></div>
+      <div class="meter" id="m-score"><div class="v">–</div><div class="k">Anomaly Score</div></div>
     </div>
 
     <div class="bezel">
@@ -268,19 +268,19 @@
     </div>
 
     <div class="card ticket" id="ticket">
-      <h2>Maintenance agent</h2>
+      <h2>Maintenance Agent</h2>
       <div id="ticket-body" class="empty">Nemotron reviews each fault the detector raises and writes it up here.</div>
     </div>
 
     <div class="card">
-      <h2>Fault drills</h2>
+      <h2>Fault Drills</h2>
       <div class="tally">
         <div><div class="v" id="t-rate">–</div><div class="k">caught</div></div>
         <div><div class="v" id="t-avg">–</div><div class="k">average time to catch</div></div>
         <div><div class="v" id="t-fa">0</div><div class="k">false alarms</div></div>
       </div>
       <table>
-        <thead><tr><th>Drill</th><th>Named as</th><th class="t">Caught in</th></tr></thead>
+        <thead><tr><th>Drill</th><th>Named As</th><th class="t">Caught In</th></tr></thead>
         <tbody id="drills"><tr><td colspan="3" class="note">Press Space as you create a fault to time a drill.</td></tr></tbody>
       </table>
     </div>
@@ -288,27 +288,27 @@
     <div class="card">
       <h2>Controls</h2>
       <div class="controls">
-        <button class="mark" id="b-mark">Mark fault created</button>
-        <button id="b-clear">Mark fault cleared</button>
-        <button id="b-run">Run motor at 70%</button>
-        <button class="stop" id="b-stop">Stop motor</button>
+        <button class="mark" id="b-mark">Mark Fault Created</button>
+        <button id="b-clear">Mark Fault Cleared</button>
+        <button id="b-run">Run Motor at 70%</button>
+        <button class="stop" id="b-stop">Stop Motor</button>
       </div>
       <div class="keys"><kbd>Space</kbd> marks a fault, <kbd>C</kbd> marks it cleared, <kbd>Esc</kbd> cancels a drill.</div>
-      <button class="reset" id="b-reset">Reset drill results</button>
+      <button class="reset" id="b-reset">Reset Drill Results</button>
     </div>
 
     <div class="card" id="recard">
-      <h2>Record and train</h2>
+      <h2>Record and Train</h2>
       <div class="pair">
         <div class="field">
           <label for="rec-label">Recording</label>
           <select id="rec-label">
-            <option value="normal">Healthy running</option>
-            <option value="loose_fastener">Loose fastener</option>
-            <option value="belt_slip">Belt slip</option>
+            <option value="normal">Healthy Running</option>
+            <option value="loose_fastener">Loose Fastener</option>
+            <option value="belt_slip">Belt Slip</option>
             <option value="stall">Stall</option>
-            <option value="disturbance">External knocks</option>
-            <option value="baseline">Healthy at test speed</option>
+            <option value="disturbance">External Knocks</option>
+            <option value="baseline">Healthy at Test Speed</option>
           </select>
         </div>
         <div class="field">
@@ -334,15 +334,15 @@ const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n)
 
 // What each condition is called on the panel, and the physical sign of it.
 const KNOWN = {
-  normal:          ["Running normally", "Matches the healthy fingerprint"],
-  loose_fastener:  ["Loose fastener", "Rattle raises vibration"],
-  belt_slip:       ["Belt slip", "Motor unloads, current drops"],
-  stall:           ["Stall", "Output braked, current climbs"],
-  unknown_anomaly: ["Unrecognized fault", "Abnormal, but not a fault it was taught"],
-  disturbance:     ["External knock", "Bump to the bench, not a machine fault"],
+  normal:          ["Running Normally", "Matches the healthy data"],
+  loose_fastener:  ["Loose Fastener", "Extra rattling from a loose bolt"],
+  belt_slip:       ["Belt Slip", "Belt losing grip, so motor current drops"],
+  stall:           ["Stall", "Output being braked, so current climbs"],
+  unknown_anomaly: ["Unrecognized Fault", "Abnormal, but not a fault it was trained on"],
+  disturbance:     ["External Knock", "A bump to the table, not a machine fault"],
 };
 const ORDER = ["normal", "loose_fastener", "belt_slip", "stall", "disturbance"];
-const title = k => (KNOWN[k] || [k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase())])[0];
+const title = k => (KNOWN[k] || [k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())])[0];
 const why = k => (KNOWN[k] || [, "Learned from your recordings"])[1];
 
 function renderAnnunciator(s, stale) {
@@ -377,9 +377,9 @@ function setMeter(id, value, unit, digits, hot) {
 
 // ---------- strip-chart recorder ----------
 const LANES = [
-  { key: "cur",   pen: "--pen-blue",     label: "Current, A",       floor: 0, dec: 2, span: 0.3 },
-  { key: "vib",   pen: "--pen-red",      label: "Vibration, g",     floor: 0, dec: 3, span: 0.06 },
-  { key: "score", pen: "--pen-graphite", label: "Anomaly score",    floor: 0, dec: 1, min: 0, max: 1.6, alarm: 1 },
+  { key: "cur",   pen: "--pen-blue",     label: "Current (A)",       floor: 0, dec: 2, span: 0.3 },
+  { key: "vib",   pen: "--pen-red",      label: "Vibration (g)",     floor: 0, dec: 3, span: 0.06 },
+  { key: "score", pen: "--pen-graphite", label: "Anomaly Score",    floor: 0, dec: 1, min: 0, max: 1.6, alarm: 1 },
 ];
 function drawStrip(hist, now) {
   const cv = $("strip"), dpr = window.devicePixelRatio || 1;
@@ -390,20 +390,21 @@ function drawStrip(hist, now) {
   const g = cv.getContext("2d");
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
-  const span = 60, left = 58, right = 74, top = 10, gap = 14;
-  const laneH = (H - top - 26 - gap * (LANES.length - 1)) / LANES.length;
+  const span = 60, left = 58, right = 62, top = 12, gap = 30, bottom = 46;
+  const laneH = (H - top - bottom - gap * (LANES.length - 1)) / LANES.length;
   const X = t => left + (W - left - right) * (1 - (now - t) / span);
 
-  // paper grid: vertical lines every 5 s, bold every 10 s, scrolling with time
-  for (let t = Math.ceil((now - span) / 5) * 5; t <= now; t += 5) {
-    const x = X(t), major = Math.round(t) % 10 === 0;
+  // time axis: a gridline every 5 s, labelled every 10 s, counting back from now (0)
+  const axisY = H - bottom + 8;
+  g.font = "500 13px Barlow, sans-serif"; g.fillStyle = cssv("--ink-soft"); g.textAlign = "center";
+  for (let ago = 0; ago <= span; ago += 5) {
+    const x = X(now - ago), major = ago % 10 === 0;
     g.strokeStyle = cssv(major ? "--grid-major" : "--grid-minor"); g.lineWidth = 1;
-    g.beginPath(); g.moveTo(x, top); g.lineTo(x, H - 26); g.stroke();
+    g.beginPath(); g.moveTo(x, top); g.lineTo(x, axisY - 6); g.stroke();
+    if (major) g.fillText(String(ago), x, axisY + 8);
   }
-  g.fillStyle = cssv("--ink-soft"); g.font = "600 13px Barlow Condensed, sans-serif";
-  g.textAlign = "right"; g.fillText("now", W - right, H - 8);
-  g.textAlign = "left"; g.fillText("value now", W - right + 8, H - 8);
-  g.textAlign = "left"; g.fillText("60 seconds ago", left, H - 8);
+  g.font = "600 14px Barlow Condensed, sans-serif";
+  g.fillText("Seconds ago", left + (W - left - right) / 2, axisY + 28);
 
   LANES.forEach((ln, i) => {
     const y0 = top + i * (laneH + gap), y1 = y0 + laneH;
@@ -422,11 +423,11 @@ function drawStrip(hist, now) {
       g.strokeStyle = cssv(k % 2 ? "--grid-minor" : "--grid-major"); g.lineWidth = 1;
       g.beginPath(); g.moveTo(left, y); g.lineTo(W - right, y); g.stroke();
     }
-    g.fillStyle = cssv("--ink-soft"); g.font = "500 12px Barlow, sans-serif"; g.textAlign = "right";
+    g.fillStyle = cssv("--ink-soft"); g.font = "500 13px Barlow, sans-serif"; g.textAlign = "right";
     g.fillText(hi.toFixed(ln.dec), left - 6, y0 + 10);
     g.fillText(lo.toFixed(ln.dec), left - 6, y1);
-    g.textAlign = "left"; g.font = "700 15px Barlow Condensed, sans-serif"; g.fillStyle = cssv(ln.pen);
-    g.fillText(ln.label, left + 8, y0 + 17);
+    g.textAlign = "left"; g.font = "700 16px Barlow Condensed, sans-serif"; g.fillStyle = cssv(ln.pen);
+    g.fillText(ln.label, left + 10, y0 + 19);
 
     // fault periods: a wash of amber on the paper
     hist.forEach((h, j) => {
@@ -440,8 +441,8 @@ function drawStrip(hist, now) {
       g.strokeStyle = cssv("--pen-red"); g.setLineDash([6, 4]); g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(left, Y(ln.alarm)); g.lineTo(W - right, Y(ln.alarm)); g.stroke();
       g.setLineDash([]);
-      g.fillStyle = cssv("--pen-red"); g.textAlign = "left"; g.font = "600 13px Barlow Condensed, sans-serif";
-      g.fillText(`alarm ${ln.alarm.toFixed(1)}`, W - right + 8, Y(ln.alarm) + 4);
+      g.fillStyle = cssv("--pen-red"); g.textAlign = "right"; g.font = "600 13px Barlow, sans-serif";
+      g.fillText(ln.alarm.toFixed(1), left - 6, Y(ln.alarm) + 4);
     }
 
     g.save(); g.beginPath(); g.rect(left, y0, W - left - right, laneH); g.clip();
@@ -470,7 +471,7 @@ function renderTicket(a, now, s) {
     testing = true;
     const sp = (s.probe && s.probe.speed) || "a lower";
     $("ticket-body").className = "";
-    $("ticket-body").innerHTML = `<div class="fault-line" style="font:700 22px/1.2 var(--cond)">Running an active test</div>
+    $("ticket-body").innerHTML = `<div class="fault-line" style="font:700 22px/1.2 var(--cond)">Running an Active Test</div>
       <div style="margin-top:6px">Motor slowed to ${sp}% to check whether the ${esc(title(s.fault).toLowerCase())} is real.
       It returns to normal speed and is measured again before Nemotron writes its diagnosis.</div>`;
     return;
@@ -496,7 +497,7 @@ function renderTicket(a, now, s) {
   } else {
     html = `<div>${esc(a.diagnosis)}</div>`;
   }
-  if (a.test_summary) html += `<div class="tested"><b>Active test.</b> ${esc(a.test_summary)}</div>`;
+  if (a.test_summary) html += `<div class="tested"><b>Active Test.</b> ${esc(a.test_summary)}</div>`;
   if (a.actions && a.actions.length) html += `<div class="acted">The agent acted: ${esc(a.actions.join("; "))}</div>`;
   const agoText = ago < 90 ? `${ago} s ago` : `${Math.round(ago / 60)} min ago`;
   html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${agoText}</div>`;
@@ -518,7 +519,7 @@ function renderDrills(sc) {
   $("t-avg").textContent = sc.avg_detect_s == null ? "–" : `${sc.avg_detect_s.toFixed(2)} s`;
   $("t-fa").textContent = sc.false_alarms;
   $("b-mark").classList.toggle("on", sc.timing);
-  $("b-mark").textContent = sc.timing ? "Cancel drill" : "Mark fault created";
+  $("b-mark").textContent = sc.timing ? "Cancel Drill" : "Mark Fault Created";
   timing = sc.timing;
   if (!sc.trials.length) {
     $("drills").innerHTML = `<tr><td colspan="3" class="note">Press Space as you create a fault to time a drill.</td></tr>`;
@@ -659,7 +660,7 @@ document.addEventListener("keydown", e => {
 const root = document.documentElement;
 const sysDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 const isDark = () => root.dataset.theme ? root.dataset.theme === "dark" : sysDark();
-function paintToggle() { $("b-theme").textContent = isDark() ? "Light mode" : "Dark mode"; }
+function paintToggle() { $("b-theme").textContent = isDark() ? "Light Mode" : "Dark Mode"; }
 try { const t = localStorage.getItem("fb-theme"); if (t) root.dataset.theme = t; } catch (e) {}
 $("b-theme").onclick = () => {
   root.dataset.theme = isDark() ? "light" : "dark";
