@@ -151,7 +151,7 @@
 
   /* ---------- strip chart ---------- */
   .recorder { background: var(--paper); border-radius: 3px; position: relative; }
-  .recorder canvas { display: block; width: 100%; height: 500px; }
+  .recorder canvas { display: block; width: 100%; height: 560px; }
   .recorder .nodata { position: absolute; inset: 0; display: none; place-items: center; text-align: center;
                       padding: 24px; color: var(--ink-soft); }
   .recorder .nodata b { display: block; font: 700 28px/1.1 var(--cond); color: var(--ink); margin-bottom: 6px; }
@@ -275,9 +275,9 @@
     <div class="card">
       <h2>Fault Drills</h2>
       <div class="tally">
-        <div><div class="v" id="t-rate">–</div><div class="k">caught</div></div>
-        <div><div class="v" id="t-avg">–</div><div class="k">average time to catch</div></div>
-        <div><div class="v" id="t-fa">0</div><div class="k">false alarms</div></div>
+        <div><div class="v" id="t-rate">–</div><div class="k">Caught</div></div>
+        <div><div class="v" id="t-avg">–</div><div class="k">Average Time to Catch</div></div>
+        <div><div class="v" id="t-fa">0</div><div class="k">False Alarms</div></div>
       </div>
       <table>
         <thead><tr><th>Drill</th><th>Named As</th><th class="t">Caught In</th></tr></thead>
@@ -390,21 +390,16 @@ function drawStrip(hist, now) {
   const g = cv.getContext("2d");
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
-  const span = 60, left = 58, right = 62, top = 12, gap = 30, bottom = 46;
+  const span = 60, left = 58, right = 62, top = 12, gap = 58, bottom = 46;
   const laneH = (H - top - bottom - gap * (LANES.length - 1)) / LANES.length;
   const X = t => left + (W - left - right) * (1 - (now - t) / span);
 
   // time axis: a gridline every 5 s, labelled every 10 s, counting back from now (0)
   const axisY = H - bottom + 8;
   g.font = "500 13px Barlow, sans-serif"; g.fillStyle = cssv("--ink-soft"); g.textAlign = "center";
-  for (let ago = 0; ago <= span; ago += 5) {
-    const x = X(now - ago), major = ago % 10 === 0;
-    g.strokeStyle = cssv(major ? "--grid-major" : "--grid-minor"); g.lineWidth = 1;
-    g.beginPath(); g.moveTo(x, top); g.lineTo(x, axisY - 6); g.stroke();
-    if (major) g.fillText(String(ago), x, axisY + 8);
-  }
+  for (let ago = 0; ago <= span; ago += 10) g.fillText(String(ago), X(now - ago), axisY + 8);
   g.font = "600 14px Barlow Condensed, sans-serif";
-  g.fillText("Seconds ago", left + (W - left - right) / 2, axisY + 28);
+  g.fillText("Seconds Ago", left + (W - left - right) / 2, axisY + 28);
 
   LANES.forEach((ln, i) => {
     const y0 = top + i * (laneH + gap), y1 = y0 + laneH;
@@ -417,6 +412,14 @@ function drawStrip(hist, now) {
     const pad = (hi - lo) * .15; lo = Math.max(ln.floor, lo - pad); hi += pad;
     const Y = v => y1 - (v - lo) / (hi - lo) * laneH;
 
+    // vertical grid inside this graph only, every 5 s (bold every 10 s)
+    for (let ago = 0; ago <= span; ago += 5) {
+      const x = X(now - ago);
+      g.strokeStyle = cssv(ago % 10 === 0 ? "--grid-major" : "--grid-minor"); g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x, y0); g.lineTo(x, y1); g.stroke();
+    }
+    g.strokeStyle = cssv("--grid-major"); g.lineWidth = 1;
+    g.strokeRect(left + .5, y0 + .5, W - left - right - 1, laneH - 1);
     // horizontal grid for this lane
     for (let k = 0; k <= 4; k++) {
       const y = y0 + laneH * k / 4;
