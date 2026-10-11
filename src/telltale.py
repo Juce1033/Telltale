@@ -116,6 +116,13 @@ def main():
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, stop_all)
 
+    import socket
+    with socket.socket() as sock:                 # is an old copy still running?
+        if sock.connect_ex(("127.0.0.1", 8080)) == 0:
+            sys.exit("Telltale already seems to be running (port 8080 is in use).\n"
+                     "Close the other Telltale window, or clear old copies with:\n"
+                     "  pkill -f dashboard.py; pkill -f detect_live.py; pkill -f agent.py")
+
     # The dashboard is the control panel: it starts and stops the detector, records and trains.
     start("dashboard", [str(find_dashboard()), "--motor", str(args.motor),
                         "--probe-speed", str(args.probe_speed)], ready_text="dashboard on")

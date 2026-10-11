@@ -8,7 +8,7 @@ rem  including the motor.
 rem ============================================================
 
 rem ---- edit this line once ----
-set ASUS=asus@YOUR-ASUS-ADDRESS
+set ASUS=asus@100.101.108.64
 set REPO=~/Downloads/Telltale/src
 
 title Telltale

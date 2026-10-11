@@ -153,6 +153,7 @@ def start_detect(mode, file=None):
         args, desc = ["--replay", file], f"Replaying {Path(file).name}"
     if not Path("model.pt").exists():
         return "No trained model yet. Record some data and press Train first."
+    AGENT.unlink(missing_ok=True)                # a new run starts with a clean agent panel
     ctl["detect"] = Proc("detect", ["detect_live.py", "--motor", str(MOTOR), *args], desc)
     return None
 
@@ -301,8 +302,9 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, shutdown)
     threading.Thread(target=poller, daemon=True).start()
-    print(f"dashboard on http://localhost:{args.port}  (Ctrl+C to stop)")
-    ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)   # bind first, then announce
+    print(f"dashboard on http://localhost:{args.port}  (Ctrl+C to stop)", flush=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

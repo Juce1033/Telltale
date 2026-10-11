@@ -170,6 +170,8 @@
   .ticket .acted { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--stop);
                    background: var(--acted-bg); font-size: 15px; }
   .ticket .empty { color: var(--ink-soft); }
+  .ticket .past dl, .ticket .past .tested, .ticket .past .acted { opacity: .5; }
+  .ticket .past-label { font-size: 14px; color: var(--ink-soft); margin-bottom: 8px; }
   .ticket .tested { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--pen-blue);
                     background: var(--tested-bg); font-size: 15px; }
 
@@ -464,7 +466,11 @@ function renderTicket(a, now, s) {
       It returns to normal speed and is measured again before Nemotron writes its diagnosis.</div>`;
     return;
   }
-  if (!a || !a.diagnosis) return;
+  if (!a || !a.diagnosis) {
+    $("ticket-body").className = "empty";
+    $("ticket-body").textContent = "Nemotron reviews each fault the detector raises and writes it up here.";
+    return;
+  }
   const lines = {};
   a.diagnosis.split("\n").forEach(l => {
     const m = l.match(/^\s*(FAULT|EVIDENCE|ACTION)\s*:\s*(.*)$/i);
@@ -483,9 +489,13 @@ function renderTicket(a, now, s) {
   }
   if (a.test_summary) html += `<div class="tested"><b>Active test.</b> ${esc(a.test_summary)}</div>`;
   if (a.actions && a.actions.length) html += `<div class="acted">The agent acted: ${esc(a.actions.join("; "))}</div>`;
-  html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${ago} s ago</div>`;
+  const agoText = ago < 90 ? `${ago} s ago` : `${Math.round(ago / 60)} min ago`;
+  html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${agoText}</div>`;
+  // once the machine is healthy again, the last report is history, not a live alarm
+  const resolved = s && (s.status === "OK" || s.status === "NOTICE");
+  if (resolved) html = `<div class="past-label">Previous fault. The machine is running normally now.</div>` + html;
   const body = $("ticket-body");
-  body.className = ""; body.innerHTML = html;
+  body.className = resolved ? "past" : ""; body.innerHTML = html;
 }
 
 // ---------- drills ----------
