@@ -21,6 +21,8 @@ import argparse
 import collections
 import glob
 import json
+import os
+import re
 import signal
 import subprocess
 import sys
@@ -83,6 +85,60 @@ def poller():
                         board["false_alarms"] += 1
                 last_status = s["status"]
         time.sleep(0.1)
+
+
+# ---------------- voice: Piper speaks each new diagnosis, on this machine ----------------
+VOICE = {"piper": None, "model": None, "ready": False}
+SPEECH = Path("speech.wav")
+speech = {"id": None, "text": None, "error": None}
+
+
+def spoken_text(a):
+    """Short, speakable version of a diagnosis: the fault and what to do."""
+    lines = {}
+    for l in (a.get("diagnosis") or "").splitlines():
+        m = re.match(r"\s*(FAULT|EVIDENCE|ACTION)\s*:\s*(.*)$", l, re.I)
+        if m:
+            lines[m.group(1).upper()] = m.group(2).strip()
+    fault = re.sub(r"\(.*?\)", "", lines.get("FAULT", "")).replace("_", " ").strip(" .")
+    if not fault:
+        return None
+    text = f"{fault[0].upper() + fault[1:]} detected."
+    if lines.get("ACTION"):
+        text += " " + lines["ACTION"]
+    return text
+
+
+def voice_worker():
+    """Watch agent.json; when a new diagnosis appears, synthesise it with Piper."""
+    last = None
+    while True:
+        a = read_json(AGENT)
+        if a and a.get("time") != last:
+            last = a.get("time")
+            text = spoken_text(a)
+            if text:
+                try:
+                    tmp = Path("speech.wav.tmp")
+                    subprocess.run([VOICE["piper"], "-m", VOICE["model"], "-f", str(tmp)],
+                                   input=text, text=True, capture_output=True, timeout=60, check=True)
+                    tmp.replace(SPEECH)
+                    speech.update(id=str(last), text=text, error=None)
+                except Exception as e:
+                    speech.update(error=f"Piper failed: {e}")
+        time.sleep(0.3)
+
+
+def setup_voice(piper, model):
+    piper, model = os.path.expanduser(piper), os.path.expanduser(model)
+    if Path(piper).exists() and Path(model).exists():
+        VOICE.update(piper=piper, model=model, ready=True)
+        SPEECH.unlink(missing_ok=True)
+        threading.Thread(target=voice_worker, daemon=True).start()
+        print(f"voice on: {Path(model).name}", flush=True)
+    else:
+        print("voice off: Piper or the voice model wasn't found "
+              f"({piper}, {model})", flush=True)
 
 
 # ---------------- control panel: the detector and one-off tasks ----------------
@@ -223,6 +279,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             return self.send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+        if self.path.startswith("/speech.wav"):
+            if SPEECH.exists():
+                return self.send(200, SPEECH.read_bytes(), "audio/wav")
+            return self.send(404, {"error": "no speech yet"})
         if self.path == "/api":
             s = read_json(STATE)
             with lock:
@@ -234,6 +294,7 @@ class Handler(BaseHTTPRequestHandler):
                     "history": list(history),
                     "score": summary(),
                     "control": control_info(),
+                    "voice": {"available": VOICE["ready"], **speech},
                 })
         self.send(404, {"error": "not found"})
 
@@ -298,12 +359,15 @@ def main():
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--motor", type=int, default=70, help="normal motor speed %%")
     p.add_argument("--probe-speed", type=int, default=45, help="active-test speed %%")
+    p.add_argument("--piper", default="~/piper-test/bin/piper", help="Piper program (text to speech)")
+    p.add_argument("--voice", default="~/piper-voices/en_US-lessac-medium.onnx", help="Piper voice model")
     args = p.parse_args()
     MOTOR, PROBE_SPEED = args.motor, args.probe_speed
     AGENT.unlink(missing_ok=True)                # fresh session: no diagnosis left over from last time
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, shutdown)
     threading.Thread(target=poller, daemon=True).start()
+    setup_voice(args.piper, args.voice)
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)   # bind first, then announce
     print(f"dashboard on http://localhost:{args.port}  (Ctrl+C to stop)", flush=True)
     server.serve_forever()

@@ -109,6 +109,7 @@
   .plate h1 { margin: 0; font: 700 34px/1 var(--cond); letter-spacing: .01em; }
   .plate .clock { margin-left: auto; font: 600 22px/1 var(--cond); color: var(--ink-soft); }
   .plate .theme { font: 600 16px/1 var(--cond); padding: 8px 12px; }
+  .plate .theme.on { background: linear-gradient(#9fe0a8, #6fc27b); color: #0f2a14; }
 
   .console { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px;
              padding: 0 28px 28px; }
@@ -231,6 +232,7 @@
 <header class="plate">
   <h1>Telltale</h1>
   <span class="clock" id="clock"></span>
+  <button class="theme" id="b-voice" type="button" hidden>Voice Off</button>
   <button class="theme" id="b-theme" type="button"></button>
 </header>
 
@@ -626,6 +628,23 @@ $("b-rec").onclick = () => {
 };
 $("b-train").onclick = () => control("/train", {}, "task");
 
+// ---------- voice: the GX10 speaks each new diagnosis (Piper); the page plays it ----------
+let voiceOn = false, heardId = undefined;
+$("b-voice").onclick = () => {
+  voiceOn = !voiceOn;
+  $("b-voice").textContent = voiceOn ? "Voice On" : "Voice Off";
+  $("b-voice").classList.toggle("on", voiceOn);
+};
+function handleVoice(v) {
+  if (!v) return;
+  $("b-voice").hidden = !v.available;
+  if (heardId === undefined) { heardId = v.id; return; }    // don't replay an old line on page load
+  if (v.id && v.id !== heardId) {
+    heardId = v.id;
+    if (voiceOn) new Audio(`/speech.wav?id=${encodeURIComponent(v.id)}`).play().catch(() => {});
+  }
+}
+
 // ---------- loop ----------
 function render(d) {
   const s = d.state, stale = d.stale || !s;
@@ -642,6 +661,7 @@ function render(d) {
   renderTicket(d.agent, d.now, stale ? null : s);
   renderDrills(d.score);
   if (d.control) renderControl(d.control);
+  handleVoice(d.voice);
 }
 
 async function poll() {
