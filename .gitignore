@@ -2,3 +2,4 @@ model.pt
 state.json
 .venv/
 __pycache__/
+agent.json
