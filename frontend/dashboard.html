@@ -36,9 +36,62 @@
     --lamp-alarm: #f4a83a;
     --lamp-alarm-hot: #ffcf7a;
     --stop: #c4352c;
+    --btn-top: #e9ece6;
+    --btn-bottom: #d3d7cf;
+    --btn-edge: #9ea398;
+    --acted-bg: #f7e3df;
+    --kbd-bg: #e3e7df;
+    --bezel-hi: rgba(255,255,255,.55);
+    --wash: rgba(244,168,58,.20);
 
     --cond: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
     --body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  }
+  /* Night shift: a control room with the lights down. Follows the system setting
+     unless the toggle in the nameplate overrides it. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+    --enamel: #1e2326;
+    --enamel-shade: #171b1d;
+    --ink: #e3e8e4;
+    --ink-soft: #9ba59f;
+    --paper: #141917;
+    --grid-major: #2d4a36;
+    --grid-minor: #1d2b23;
+    --pen-blue: #7aa9ff;
+    --pen-red: #ff7a6b;
+    --pen-graphite: #e3e8e4;
+    --glass: #0e1110;
+    --glass-text: #7a857f;
+    --btn-top: #353c3f;
+    --btn-bottom: #282e31;
+    --btn-edge: #0f1214;
+    --acted-bg: #3b1f1b;
+    --kbd-bg: #2b3134;
+    --bezel-hi: rgba(255,255,255,.05);
+    --wash: rgba(244,168,58,.16);
+    }
+  }
+  :root[data-theme="dark"] {
+    --enamel: #1e2326;
+    --enamel-shade: #171b1d;
+    --ink: #e3e8e4;
+    --ink-soft: #9ba59f;
+    --paper: #141917;
+    --grid-major: #2d4a36;
+    --grid-minor: #1d2b23;
+    --pen-blue: #7aa9ff;
+    --pen-red: #ff7a6b;
+    --pen-graphite: #e3e8e4;
+    --glass: #0e1110;
+    --glass-text: #7a857f;
+    --btn-top: #353c3f;
+    --btn-bottom: #282e31;
+    --btn-edge: #0f1214;
+    --acted-bg: #3b1f1b;
+    --kbd-bg: #2b3134;
+    --bezel-hi: rgba(255,255,255,.05);
+    --wash: rgba(244,168,58,.16);
   }
   * { box-sizing: border-box; }
   html { background: var(--enamel); }
@@ -51,6 +104,7 @@
   .plate h1 { margin: 0; font: 700 34px/1 var(--cond); letter-spacing: .01em; }
   .plate .where { color: var(--ink-soft); font-size: 15px; }
   .plate .clock { margin-left: auto; font: 600 22px/1 var(--cond); color: var(--ink-soft); }
+  .plate .theme { font: 600 16px/1 var(--cond); padding: 8px 12px; }
 
   .console { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px;
              padding: 0 28px 28px; }
@@ -58,7 +112,7 @@
 
   /* inset bezel: every instrument sits recessed in the enamel */
   .bezel { background: var(--enamel); border-radius: 6px;
-           box-shadow: inset 0 2px 3px rgba(0,0,0,.18), inset 0 -1px 0 rgba(255,255,255,.55); padding: 10px; }
+           box-shadow: inset 0 2px 3px rgba(0,0,0,.18), inset 0 -1px 0 var(--bezel-hi); padding: 10px; }
 
   /* ---------- annunciator ---------- */
   .annunciator { display: grid; grid-template-columns: repeat(var(--tiles, 4), minmax(0, 1fr)); gap: 8px;
@@ -108,7 +162,7 @@
   .ticket dd { margin: 0; }
   .ticket .fault-line { font: 700 24px/1.15 var(--cond); }
   .ticket .acted { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--stop);
-                   background: #f7e3df; font-size: 15px; }
+                   background: var(--acted-bg); font-size: 15px; }
   .ticket .empty { color: var(--ink-soft); }
 
   .tally { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
@@ -123,15 +177,15 @@
   .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   button { font: 600 19px/1 var(--cond); letter-spacing: .01em; padding: 13px 12px; cursor: pointer;
            border-radius: 5px; border: 0; color: var(--ink);
-           background: linear-gradient(#e9ece6, #d3d7cf);
-           box-shadow: 0 2px 0 #9ea398, 0 3px 6px rgba(0,0,0,.18); }
-  button:active { transform: translateY(2px); box-shadow: 0 0 0 #9ea398, 0 1px 2px rgba(0,0,0,.2); }
+           background: linear-gradient(var(--btn-top), var(--btn-bottom));
+           box-shadow: 0 2px 0 var(--btn-edge), 0 3px 6px rgba(0,0,0,.18); }
+  button:active { transform: translateY(2px); box-shadow: 0 0 0 var(--btn-edge), 0 1px 2px rgba(0,0,0,.2); }
   button:focus-visible { outline: 3px solid var(--pen-blue); outline-offset: 2px; }
-  button.mark.on { background: linear-gradient(var(--lamp-alarm-hot), var(--lamp-alarm)); }
+  button.mark.on { background: linear-gradient(var(--lamp-alarm-hot), var(--lamp-alarm)); color: #2a1a00; }
   button.stop { color: #fff; background: linear-gradient(#d84a40, #a82920); box-shadow: 0 2px 0 #6e1712, 0 3px 6px rgba(0,0,0,.25); }
   .keys { margin-top: 10px; font-size: 14px; color: var(--ink-soft); }
-  kbd { font: 600 14px/1 var(--cond); background: #e3e7df; border-radius: 3px; padding: 2px 6px;
-        box-shadow: 0 1px 0 #9ea398; color: var(--ink); }
+  kbd { font: 600 14px/1 var(--cond); background: var(--kbd-bg); border-radius: 3px; padding: 2px 6px;
+        box-shadow: 0 1px 0 var(--btn-edge); color: var(--ink); }
   .reset { margin-top: 10px; background: none; box-shadow: none; padding: 4px 0; font: 500 14px/1 var(--body);
            color: var(--ink-soft); text-decoration: underline; }
 
@@ -149,6 +203,7 @@
   <h1>Failure Bench</h1>
   <span class="where">Detector and agent running on the ASUS Ascent GX10. Nothing leaves this machine.</span>
   <span class="clock" id="clock"></span>
+  <button class="theme" id="b-theme" type="button"></button>
 </header>
 
 <div class="console">
@@ -158,7 +213,7 @@
     <div class="bezel meters">
       <div class="meter" id="m-cur"><div class="v">–</div><div class="k">Motor current</div></div>
       <div class="meter" id="m-vib"><div class="v">–</div><div class="k">Vibration</div></div>
-      <div class="meter" id="m-score"><div class="v">–</div><div class="k">How unusual (alarm at 1.0)</div></div>
+      <div class="meter" id="m-score"><div class="v">–</div><div class="k">Anomaly score (alarm at 1.0)</div></div>
     </div>
 
     <div class="bezel">
@@ -249,7 +304,7 @@ function setMeter(id, value, unit, digits, hot) {
 const LANES = [
   { key: "cur",   pen: "--pen-blue",     label: "Current, A",       floor: 0, dec: 2, span: 0.3 },
   { key: "vib",   pen: "--pen-red",      label: "Vibration, g",     floor: 0, dec: 3, span: 0.06 },
-  { key: "score", pen: "--pen-graphite", label: "How unusual",      floor: 0, dec: 1, min: 0, max: 1.6, alarm: 1 },
+  { key: "score", pen: "--pen-graphite", label: "Anomaly score",    floor: 0, dec: 1, min: 0, max: 1.6, alarm: 1 },
 ];
 function drawStrip(hist, now) {
   const cv = $("strip"), dpr = window.devicePixelRatio || 1;
@@ -298,7 +353,7 @@ function drawStrip(hist, now) {
     g.fillText(ln.label, left + 8, y0 + 17);
 
     // fault periods: a wash of amber on the paper
-    g.fillStyle = "rgba(244,168,58,.20)";
+    g.fillStyle = cssv("--wash");
     hist.forEach((h, j) => {
       if (h.status !== "FAULT") return;
       const xa = X(h.t), xb = j + 1 < hist.length ? X(hist[j + 1].t) : W - right;
@@ -397,6 +452,18 @@ document.addEventListener("keydown", e => {
   if (e.code === "Space") { e.preventDefault(); post("/mark", { type: "inject" }); }
   if (e.key === "c" || e.key === "C") post("/mark", { type: "clear" });
 });
+// light / dark toggle; remembers the choice in this browser if it can
+const root = document.documentElement;
+const sysDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+const isDark = () => root.dataset.theme ? root.dataset.theme === "dark" : sysDark();
+function paintToggle() { $("b-theme").textContent = isDark() ? "Light mode" : "Dark mode"; }
+try { const t = localStorage.getItem("fb-theme"); if (t) root.dataset.theme = t; } catch (e) {}
+$("b-theme").onclick = () => {
+  root.dataset.theme = isDark() ? "light" : "dark";
+  try { localStorage.setItem("fb-theme", root.dataset.theme); } catch (e) {}
+  paintToggle();
+};
+paintToggle();
 const tick = () => $("clock").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 tick(); setInterval(tick, 1000);
 renderAnnunciator(null, true);
