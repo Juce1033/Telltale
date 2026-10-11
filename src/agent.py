@@ -270,10 +270,10 @@ def run_tool(name, args):
 THINK = {"value": False}   # reasoning mode off = much faster replies; --think turns it on
 
 
-def chat(model, messages, tools=TOOLS):
+def chat(model, messages, tools=TOOLS, temperature=0.2):
     payload = {"model": model, "messages": messages, "stream": False,
                "keep_alive": "2h",                      # keep the model loaded in memory
-               "options": {"temperature": 0.2}}
+               "options": {"temperature": temperature}}
     if tools:
         payload["tools"] = tools
     if THINK["value"] is not None:
@@ -286,7 +286,7 @@ def chat(model, messages, tools=TOOLS):
     except urllib.error.HTTPError as e:
         if "think" in payload and e.code == 400:         # model doesn't accept the think flag
             THINK["value"] = None
-            return chat(model, messages, tools)
+            return chat(model, messages, tools, temperature)
         raise
 
 
@@ -308,10 +308,12 @@ Fault signatures (ratios compare to the healthy machine; 0.9-1.1 means unchanged
 - stall: current UP sharply; dangerous above 0.6 A.
 - If the active test says persisted_after_retest = false, it was a transient knock, not a fault.
 
+The measurements include "signature_check", computed in code from the ratios. It is
+arithmetic, not opinion: trust it. If it says the named fault FITS, check 2 passes.
+
 Checklist:
 1. Every number in EVIDENCE must match the measurements (small rounding is fine).
-2. The named fault must fit its signature in the measurements. If the measurements clearly
-   point to a different fault, or to none, it fails.
+2. The named fault must fit its signature: use signature_check.
 3. ACTION must match the severity: a confirmed fault needs a physical repair step; "no action"
    is only acceptable when the active test showed the anomaly did not persist.
 4. Format must be the three lines FAULT / EVIDENCE / ACTION.
@@ -322,7 +324,35 @@ Reply with exactly one of:
 VERDICT: APPROVE
 or
 VERDICT: REVISE
+CHECK: <the number of the check that failed: 1, 2, 3 or 4>
 REASON: <one sentence: what is wrong and what the measurements actually show>"""
+
+FAULT_NAMES = ("loose_fastener", "belt_slip", "stall", "disturbance", "unknown_anomaly", "normal")
+
+
+def named_fault(draft):
+    line = parse_lines(draft).get("FAULT", "").lower().replace("-", "_").replace(" ", "_")
+    return next((f for f in FAULT_NAMES if f in line), None)
+
+
+def signature_check(fault, trend, test):
+    """Does the named fault match its physical signature? Plain arithmetic on the ratios."""
+    v, c = trend.get("vibration_ratio"), trend.get("current_ratio")
+    if test and test.get("persisted_after_retest") is False:
+        return {"fault": fault, "fits": fault in ("disturbance", "normal"),
+                "why": "active test: the anomaly vanished on retest, so it was transient"}
+    if fault is None or v is None or c is None:
+        return {"fault": fault, "fits": None, "why": "not enough data to check"}
+    rules = {
+        "loose_fastener": (v >= 1.5 and 0.85 <= c <= 1.25, "needs vibration ratio >= 1.5 with current ratio 0.85-1.25"),
+        "belt_slip":      (c < 0.9, "needs current ratio below 0.9"),
+        "stall":          (c > 1.15, "needs current ratio above 1.15"),
+    }
+    if fault not in rules:          # unknown_anomaly etc.: nothing specific to contradict
+        return {"fault": fault, "fits": None, "why": "no fixed signature for this name"}
+    ok, need = rules[fault]
+    return {"fault": fault, "fits": ok,
+            "why": f"{fault} {need}; measured vibration {v}x, current {c}x -> {'FITS' if ok else 'DOES NOT FIT'}"}
 
 NO_ACTION = re.compile(r"\b(no (further )?(action|repair|maintenance|intervention)s?( is)?( needed| required| necessary)?"
                        r"|not (needed|required|necessary)|nothing to (do|fix)|all (good|fine)"
@@ -352,15 +382,34 @@ def rule_checks(draft, facts):
 
 
 def review(model, draft, facts):
-    """Second Nemotron call: approve the draft or say what's wrong with it."""
+    """Second Nemotron call: approve the draft or say what's wrong with it.
+    Code has the last word on anything code can calculate."""
     problems = rule_checks(draft, facts)
+    sig = signature_check(named_fault(draft), facts["sensor_trend_last_5s"], facts.get("active_test"))
+    if sig["fits"] is False:
+        problems.append(f"the numbers don't fit {sig['fault']}: {sig['why']}")
+    facts = {**facts, "signature_check": sig}
     msg = chat(model, [{"role": "system", "content": REVIEWER},
                        {"role": "user", "content": f"MEASUREMENTS:\n{json.dumps(facts, indent=1)}\n\n"
-                                                   f"DRAFT DIAGNOSIS:\n{draft}"}], tools=None)
+                                                   f"DRAFT DIAGNOSIS:\n{draft}"}], tools=None, temperature=0)
     text = re.sub(r"<think>.*?</think>", "", msg.get("content", ""), flags=re.S).strip()
     reason = re.search(r"REASON\s*:\s*(.+)", text, re.I)
+    check = re.search(r"CHECK\s*:\s*(\d)", text, re.I)
+    check = check.group(1) if check else None
     if re.search(r"VERDICT\s*:\s*REVISE", text, re.I):
-        problems.append(reason.group(1).strip() if reason else "the reviewer found a problem")
+        why = reason.group(1).strip() if reason else "the reviewer found a problem"
+        # overrule the reviewer where code already knows the answer
+        if check is None and sig["fits"] is True and not problems:
+            print(f"  [review] overruled (no check named; code checks all pass): {why}")
+        elif check == "2" and sig["fits"] is True:
+            print(f"  [review] overruled (signature fits by calculation): {why}")
+        elif check == "4" and not any("format" in p for p in problems):
+            print(f"  [review] overruled (format is fine): {why}")
+        elif check == "3" and not any("no repair" in p for p in problems) and not NO_ACTION.search(
+                parse_lines(draft).get("ACTION", "")):
+            print(f"  [review] overruled (action gives a repair step): {why}")
+        else:
+            problems.append(why)
     elif not re.search(r"VERDICT\s*:\s*APPROVE", text, re.I) and not problems:
         print(f"  [review] unclear reply, treating as approved: {text[:80]!r}")
     return problems
