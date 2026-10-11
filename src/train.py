@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from features import load_dataset
+from features import NOT_FAULTS, load_dataset
 
 torch.manual_seed(0)
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -58,13 +58,14 @@ def recon_error(ae, X):
 
 def main():
     print(f"device: {DEV}")
-    X, y, fid, pos = load_dataset("data")
+    X, y, fid, pos, aug = load_dataset("data")
     classes = sorted(set(y))
     assert "normal" in classes, "need at least one CSV labeled 'normal'"
 
-    # last 20% of every recording is held out -- overlapping windows would leak otherwise
-    val = pos > 0.8
-    tr = ~val
+    # last 20% of every recording is held out -- overlapping windows would leak otherwise.
+    # Augmented copies are training-only; grading always uses untouched real data.
+    val = (pos > 0.8) & ~aug
+    tr = (pos <= 0.8)
     normal_tr = tr & (y == "normal")
 
     mu = X[normal_tr].mean(0)
@@ -92,7 +93,12 @@ def main():
         m = val & (y == c)
         flagged = (err[m] > threshold).mean()
         right = (pred[m] == classes.index(c)).mean()
-        note = "  <- false alarm rate" if c == "normal" else ""
+        if c == "normal":
+            note = "  (flagged % = false alarm rate)"
+        elif c in NOT_FAULTS:
+            note = "  (not a fault: shown as a notice, never an alarm)"
+        else:
+            note = "  (flagged % = detection rate)"
         print(f"{c:<16}{flagged:>17.0%}{right:>18.0%}{note}")
 
     torch.save({"ae": ae.state_dict(), "clf": clf.state_dict(), "mu": mu, "sd": sd,

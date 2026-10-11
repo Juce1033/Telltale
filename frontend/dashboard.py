@@ -8,9 +8,11 @@ No internet, no extra packages -- just Python's standard library.
 Reads:  state.json (detector, 4x/sec), agent.json (Nemotron's diagnosis)
 Writes: motor_cmd.txt (Start/Stop buttons; detect_live.py forwards it to the ESP32)
 
-Scoreboard: press "Fault injected" (or Space) the moment you create a fault.
-The dashboard times how long the detector takes to flag it. Press "Cleared" (or C)
-once the fault is undone. A FAULT with no injection marked counts as a false alarm.
+Fault drills: press "Mark fault created" (or Space) the moment you create a fault;
+the dashboard times how long the detector takes to flag it. Press "Mark fault cleared"
+(or C) once the fault is undone -- a drill the detector never caught is recorded as
+missed. Pressing the button again while timing (or Esc) cancels a drill started by
+mistake. A FAULT with no drill running counts as a false alarm.
 """
 import argparse
 import collections
@@ -39,7 +41,7 @@ def read_json(path):
 
 def poller():
     """Sample state.json 4x/sec into history and update the scoreboard."""
-    global last_status
+    global last_status, pending
     last_t = None
     while True:
         s = read_json(STATE)
@@ -49,10 +51,13 @@ def poller():
                 history.append({"t": s["time"], "cur": s["current_mean_a"],
                                 "vib": s["vibration_rms"], "score": s["anomaly_score"],
                                 "status": s["status"]})
-                if s["status"] == "FAULT" and last_status != "FAULT":
+                # a new fault = healthy (or a knock) turning into a fault; returning from an
+                # active test with the fault still present is the same fault, not a new one
+                if s["status"] == "FAULT" and last_status in ("OK", "NOTICE"):
                     if pending and pending["detect_s"] is None:
                         pending["detect_s"] = round(time.time() - pending["t"], 2)
                         pending["fault"] = s["fault"]
+                        pending = None                         # caught: this drill is done
                     elif not pending:
                         board["false_alarms"] += 1
                 last_status = s["status"]
@@ -62,10 +67,12 @@ def poller():
 def summary():
     trials = board["trials"]
     detected = [t for t in trials if t["detect_s"] is not None]
+    missed = [t for t in trials if t.get("missed")]
     times = [t["detect_s"] for t in detected]
     return {
         "injected": len(trials),
         "detected": len(detected),
+        "missed": len(missed),
         "rate": round(len(detected) / len(trials), 3) if trials else None,
         "avg_detect_s": round(sum(times) / len(times), 2) if times else None,
         "last_detect_s": times[-1] if times else None,
@@ -109,10 +116,21 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(n) or b"{}")
         with lock:
             if self.path == "/mark":
-                if body.get("type") == "inject" and not pending:
-                    pending = {"t": time.time(), "detect_s": None, "fault": None}
+                kind = body.get("type")
+                if kind == "inject" and not pending:
+                    pending = {"t": time.time(), "detect_s": None, "fault": None, "missed": False}
                     board["trials"].append(pending)
-                elif body.get("type") == "clear":
+                    s = read_json(STATE)
+                    if s and s.get("status") == "FAULT":      # already flagged before the mark
+                        pending["detect_s"], pending["fault"] = 0.0, s["fault"]
+                        pending = None
+                elif kind == "cancel" and pending:
+                    if pending in board["trials"]:
+                        board["trials"].remove(pending)       # started by mistake: drop it
+                    pending = None
+                elif kind == "clear" and pending:
+                    if pending["detect_s"] is None:
+                        pending["missed"] = True              # fault was undone, never caught
                     pending = None
             elif self.path == "/reset":
                 board["trials"].clear()

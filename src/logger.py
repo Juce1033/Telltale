@@ -22,14 +22,16 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--port", default="/dev/ttyUSB0")
     p.add_argument("--baud", type=int, default=921600)
-    p.add_argument("--label", default="normal", help="normal, loose_fastener, belt_slip, stall")
+    p.add_argument("--label", default="normal",
+                   help="normal, loose_fastener, belt_slip, stall, disturbance")
     p.add_argument("--seconds", type=float, default=60)
     p.add_argument("--outdir", default="data")
     p.add_argument("--motor", type=int, default=70, help="motor speed %% to run while recording (0 = off)")
     args = p.parse_args()
 
-    Path(args.outdir).mkdir(exist_ok=True)
-    out_path = Path(args.outdir) / f"{args.label}_{time.strftime('%H%M%S')}.csv"
+    Path(args.outdir).mkdir(parents=True, exist_ok=True)
+    # motor speed goes in the name so the agent can find e.g. the healthy 45% baseline
+    out_path = Path(args.outdir) / f"{args.label}_m{args.motor}_{time.strftime('%H%M%S')}.csv"
 
     ser = serial.Serial(args.port, args.baud, timeout=1)
     time.sleep(2)              # ESP32 resets when the port opens

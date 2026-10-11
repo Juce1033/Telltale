@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Failure Bench</title>
+<title>Telltale</title>
 <style>
   /* Fonts are embedded so the console works with no internet. */
   @font-face { font-family: "Barlow Condensed"; font-weight: 600; font-display: block;
@@ -35,14 +35,17 @@
     --lamp-run: #7fd48a;
     --lamp-alarm: #f4a83a;
     --lamp-alarm-hot: #ffcf7a;
+    --lamp-info: #8ec0ff;
     --stop: #c4352c;
     --btn-top: #e9ece6;
     --btn-bottom: #d3d7cf;
     --btn-edge: #9ea398;
     --acted-bg: #f7e3df;
+    --tested-bg: #e1eaf6;
     --kbd-bg: #e3e7df;
     --bezel-hi: rgba(255,255,255,.55);
     --wash: rgba(244,168,58,.20);
+    --wash-test: rgba(90,150,230,.18);
 
     --cond: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
     --body: "Barlow", "Segoe UI", system-ui, sans-serif;
@@ -67,6 +70,7 @@
     --btn-bottom: #282e31;
     --btn-edge: #0f1214;
     --acted-bg: #3b1f1b;
+    --tested-bg: #19263a;
     --kbd-bg: #2b3134;
     --bezel-hi: rgba(255,255,255,.05);
     --wash: rgba(244,168,58,.16);
@@ -89,6 +93,7 @@
     --btn-bottom: #282e31;
     --btn-edge: #0f1214;
     --acted-bg: #3b1f1b;
+    --tested-bg: #19263a;
     --kbd-bg: #2b3134;
     --bezel-hi: rgba(255,255,255,.05);
     --wash: rgba(244,168,58,.16);
@@ -102,7 +107,6 @@
   .plate { display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
            padding: 18px 28px 14px; }
   .plate h1 { margin: 0; font: 700 34px/1 var(--cond); letter-spacing: .01em; }
-  .plate .where { color: var(--ink-soft); font-size: 15px; }
   .plate .clock { margin-left: auto; font: 600 22px/1 var(--cond); color: var(--ink-soft); }
   .plate .theme { font: 600 16px/1 var(--cond); padding: 8px 12px; }
 
@@ -131,6 +135,8 @@
                   box-shadow: 0 0 28px rgba(127,212,138,.45), inset 0 0 18px rgba(255,255,255,.35); }
   .tile.lit-alarm { background: var(--lamp-alarm); color: #3a2200;
                     box-shadow: 0 0 34px rgba(244,168,58,.6), inset 0 0 22px rgba(255,255,255,.4); }
+  .tile.lit-info { background: var(--lamp-info); color: #0d2238;
+                   box-shadow: 0 0 26px rgba(122,182,255,.45), inset 0 0 18px rgba(255,255,255,.35); }
   .tile.flash { animation: flash .5s steps(1) infinite; }
   @keyframes flash { 50% { background: var(--lamp-alarm-hot); box-shadow: 0 0 46px rgba(255,207,122,.9); } }
   @media (prefers-reduced-motion: reduce) { .tile.flash { animation: none; } }
@@ -164,6 +170,8 @@
   .ticket .acted { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--stop);
                    background: var(--acted-bg); font-size: 15px; }
   .ticket .empty { color: var(--ink-soft); }
+  .ticket .tested { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--pen-blue);
+                    background: var(--tested-bg); font-size: 15px; }
 
   .tally { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
   .tally .v { font: 700 36px/1 var(--cond); }
@@ -171,6 +179,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 15px; }
   th { text-align: left; font-weight: 500; color: var(--ink-soft); font-size: 13px; padding: 4px 0; }
   td { padding: 5px 0; border-top: 1px solid var(--grid-minor); }
+  td.missed { color: var(--pen-red); font-weight: 500; }
   td.t { text-align: right; font-family: var(--cond); font-weight: 600; font-size: 17px; }
   th.t { text-align: right; }
 
@@ -200,8 +209,7 @@
 </head>
 <body>
 <header class="plate">
-  <h1>Failure Bench</h1>
-  <span class="where">Detector and agent running on the ASUS Ascent GX10. Nothing leaves this machine.</span>
+  <h1>Telltale</h1>
   <span class="clock" id="clock"></span>
   <button class="theme" id="b-theme" type="button"></button>
 </header>
@@ -252,7 +260,7 @@
         <button id="b-run">Run motor at 70%</button>
         <button class="stop" id="b-stop">Stop motor</button>
       </div>
-      <div class="keys"><kbd>Space</kbd> marks a fault, <kbd>C</kbd> marks it cleared.</div>
+      <div class="keys"><kbd>Space</kbd> marks a fault, <kbd>C</kbd> marks it cleared, <kbd>Esc</kbd> cancels a drill.</div>
       <button class="reset" id="b-reset">Reset drill results</button>
     </div>
   </aside>
@@ -269,8 +277,9 @@ const KNOWN = {
   belt_slip:       ["Belt slip", "Motor unloads, current drops"],
   stall:           ["Stall", "Output braked, current climbs"],
   unknown_anomaly: ["Unrecognized fault", "Abnormal, but not a fault it was taught"],
+  disturbance:     ["External knock", "Bump to the bench, not a machine fault"],
 };
-const ORDER = ["normal", "loose_fastener", "belt_slip", "stall"];
+const ORDER = ["normal", "loose_fastener", "belt_slip", "stall", "disturbance"];
 const title = k => (KNOWN[k] || [k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase())])[0];
 const why = k => (KNOWN[k] || [, "Learned from your recordings"])[1];
 
@@ -286,10 +295,14 @@ function renderAnnunciator(s, stale) {
     if (!stale && s) {
       if (s.status === "OK" && k === "normal") cls += " lit-run";
       if (s.status === "FAULT" && k === s.fault) cls += " lit-alarm" + (s.fault_active_s < 4 ? " flash" : "");
+      if (s.status === "NOTICE" && k === s.fault) cls += " lit-info";
+      if (s.status === "PROBE" && k === s.fault) cls += " lit-alarm";
     }
     const p = Math.round((probs[k] || 0) * 100);
+    const testing = s && s.status === "PROBE" && k === s.fault;
+    const sub = testing ? `Testing at ${(s.probe && s.probe.speed) || "low"}% speed…` : why(k);
     return `<div class="${cls}" title="Classifier likelihood ${p}%">
-      <div class="name">${title(k)}</div><div class="why">${why(k)}</div>
+      <div class="name">${title(k)}</div><div class="why">${sub}</div>
       <div class="lk"><i style="width:${stale ? 0 : p}%"></i></div></div>`;
   }).join("");
 }
@@ -353,9 +366,9 @@ function drawStrip(hist, now) {
     g.fillText(ln.label, left + 8, y0 + 17);
 
     // fault periods: a wash of amber on the paper
-    g.fillStyle = cssv("--wash");
     hist.forEach((h, j) => {
-      if (h.status !== "FAULT") return;
+      if (h.status !== "FAULT" && h.status !== "PROBE") return;
+      g.fillStyle = h.status === "FAULT" ? cssv("--wash") : cssv("--wash-test");
       const xa = X(h.t), xb = j + 1 < hist.length ? X(hist[j + 1].t) : W - right;
       g.fillRect(xa, y0, Math.max(1, xb - xa), laneH);
     });
@@ -380,7 +393,17 @@ const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
 // show fault names the way the panel does: loose_fastener -> Loose fastener
 const pretty = s => String(s).replace(/\b(normal|loose[_-]fastener|belt_slip|stall|unknown_anomaly)\b/gi,
   m => title(m.toLowerCase().replace("-", "_")));
-function renderTicket(a, now) {
+let testing = false;
+function renderTicket(a, now, s) {
+  if (s && s.status === "PROBE") {
+    testing = true;
+    const sp = (s.probe && s.probe.speed) || "a lower";
+    $("ticket-body").className = "";
+    $("ticket-body").innerHTML = `<div class="fault-line" style="font:700 22px/1.2 var(--cond)">Running an active test</div>
+      <div style="margin-top:6px">Motor slowed to ${sp}% to check whether the ${esc(title(s.fault).toLowerCase())} is real.
+      It returns to normal speed and is measured again before Nemotron writes its diagnosis.</div>`;
+    return;
+  }
   if (!a || !a.diagnosis) return;
   const lines = {};
   a.diagnosis.split("\n").forEach(l => {
@@ -398,6 +421,7 @@ function renderTicket(a, now) {
   } else {
     html = `<div>${esc(a.diagnosis)}</div>`;
   }
+  if (a.test_summary) html += `<div class="tested"><b>Active test.</b> ${esc(a.test_summary)}</div>`;
   if (a.actions && a.actions.length) html += `<div class="acted">The agent acted: ${esc(a.actions.join("; "))}</div>`;
   html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${ago} s ago</div>`;
   const body = $("ticket-body");
@@ -406,16 +430,23 @@ function renderTicket(a, now) {
 
 // ---------- drills ----------
 function renderDrills(sc) {
-  $("t-rate").textContent = sc.injected ? `${sc.detected} of ${sc.injected}` : "–";
+  const last = sc.trials[sc.trials.length - 1];
+  const done = sc.injected - (sc.timing && last && last.detect_s == null ? 1 : 0);
+  $("t-rate").textContent = done > 0 ? `${sc.detected} of ${done}` : "–";
   $("t-avg").textContent = sc.avg_detect_s == null ? "–" : `${sc.avg_detect_s.toFixed(2)} s`;
   $("t-fa").textContent = sc.false_alarms;
   $("b-mark").classList.toggle("on", sc.timing);
-  $("b-mark").textContent = sc.timing ? "Timing the drill…" : "Mark fault created";
-  if (!sc.trials.length) return;
+  $("b-mark").textContent = sc.timing ? "Cancel drill" : "Mark fault created";
+  timing = sc.timing;
+  if (!sc.trials.length) {
+    $("drills").innerHTML = `<tr><td colspan="3" class="note">Press Space as you create a fault to time a drill.</td></tr>`;
+    return;
+  }
   const first = sc.injected - sc.trials.length + 1;
   $("drills").innerHTML = sc.trials.map((t, i) => `<tr>
       <td>${first + i}</td>
-      <td>${t.fault ? esc(title(t.fault)) : (t.detect_s == null ? "Waiting for the detector" : "–")}</td>
+      ${t.missed ? `<td class="missed">Missed</td>`
+        : `<td>${t.fault ? esc(title(t.fault)) : (t.detect_s == null ? "Waiting for the detector" : "–")}</td>`}
       <td class="t">${t.detect_s == null ? "–" : t.detect_s.toFixed(2) + " s"}</td></tr>`).reverse().join("");
 }
 
@@ -432,7 +463,7 @@ function render(d) {
     ["m-cur", "m-vib", "m-score"].forEach(id => setMeter(id, null));
   }
   drawStrip(d.history, d.now);
-  renderTicket(d.agent, d.now);
+  renderTicket(d.agent, d.now, stale ? null : s);
   renderDrills(d.score);
 }
 
@@ -442,7 +473,8 @@ async function poll() {
   setTimeout(poll, 250);
 }
 const post = (path, body = {}) => fetch(path, { method: "POST", body: JSON.stringify(body) });
-$("b-mark").onclick  = () => post("/mark", { type: "inject" });
+let timing = false;
+$("b-mark").onclick  = () => post("/mark", { type: timing ? "cancel" : "inject" });
 $("b-clear").onclick = () => post("/mark", { type: "clear" });
 $("b-run").onclick   = () => post("/motor", { percent: 70 });
 $("b-stop").onclick  = () => post("/motor", { percent: 0 });
@@ -451,6 +483,7 @@ document.addEventListener("keydown", e => {
   if (e.target.tagName === "BUTTON" && e.code === "Space") return;
   if (e.code === "Space") { e.preventDefault(); post("/mark", { type: "inject" }); }
   if (e.key === "c" || e.key === "C") post("/mark", { type: "clear" });
+  if (e.key === "Escape") post("/mark", { type: "cancel" });
 });
 // light / dark toggle; remembers the choice in this browser if it can
 const root = document.documentElement;

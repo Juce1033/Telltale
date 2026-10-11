@@ -51,20 +51,57 @@ def check_rate(df, path):
         print(f"  WARNING {path.name}: ~{rate:.0f} Hz (expected {FS}), {gaps} gaps")
 
 
-def load_dataset(folder="data"):
-    """Returns X [n_windows, n_feats], labels [n_windows], file_ids, positions (0..1 within file)."""
-    X, y, fid, pos = [], [], [], []
+# Labels that are not machine faults: things the model should recognise and report,
+# but never raise an alarm for. Healthy-type labels can be augmented.
+NOT_FAULTS = {"normal", "disturbance"}
+AUGMENT = {"normal": 3}          # extra synthetic copies per real training window
+
+
+def augment_window(win, rng):
+    """One realistic variation of a healthy 1-second window:
+    vibration level +-15%, motor speed +-3%, a little extra sensor noise, current +-5%."""
+    w = win.copy()
+    f = rng.uniform(0.97, 1.03)                       # speed change = time stretch
+    n = len(w)
+    src = np.linspace(0, n - 1, n) * f
+    src = np.clip(src, 0, n - 1)
+    for ch in range(1, 8):
+        w[:, ch] = np.interp(src, np.arange(n), win[:, ch])
+    w[:, 1] *= rng.uniform(0.95, 1.05)                # current level
+    for ch in range(2, 8):                            # vibration level + noise, gravity kept
+        mean = w[:, ch].mean()
+        dev = (w[:, ch] - mean) * rng.uniform(0.85, 1.15)
+        dev += rng.normal(0, 0.10 * (dev.std() + 1e-9), n)
+        w[:, ch] = mean + dev
+    return w
+
+
+def load_dataset(folder="data", augment=True, train_frac=0.8, seed=0):
+    """Returns X [n, feats], labels [n], file_ids [n], positions 0..1 within file [n],
+    and is_aug [n] (True for synthetic copies; those only ever land in the training split)."""
+    rng = np.random.default_rng(seed)
+    X, y, fid, pos, aug = [], [], [], [], []
     files = sorted(Path(folder).glob("*.csv"))
     if not files:
         raise SystemExit(f"No CSVs in {folder}/")
     for i, path in enumerate(files):
         df = pd.read_csv(path)
         check_rate(df, path)
-        label = df["label"].iloc[0] if "label" in df else path.stem.split("_")[0]
-        feats = list(windows(df[COLS].to_numpy(dtype=np.float64)))
-        X += feats
-        y += [label] * len(feats)
-        fid += [i] * len(feats)
-        pos += list(np.linspace(0, 1, len(feats)))
-        print(f"  {path.name}: {len(feats)} windows, label={label}")
-    return np.stack(X), np.array(y), np.array(fid), np.array(pos)
+        label = str(df["label"].iloc[0]) if "label" in df else path.stem.split("_")[0]
+        label = label.replace("-", "_")
+        arr = df[COLS].to_numpy(dtype=np.float64)
+        starts = list(range(0, len(arr) - WIN + 1, HOP))
+        p = np.linspace(0, 1, len(starts))
+        copies = AUGMENT.get(label, 0) if augment else 0
+        n_aug = 0
+        for st, pp in zip(starts, p):
+            win = arr[st:st + WIN]
+            X.append(featurize(win)); y.append(label); fid.append(i); pos.append(pp); aug.append(False)
+            if pp <= train_frac:                      # augment training windows only
+                for _ in range(copies):
+                    X.append(featurize(augment_window(win, rng)))
+                    y.append(label); fid.append(i); pos.append(pp); aug.append(True)
+                    n_aug += 1
+        extra = f" (+{n_aug} augmented)" if n_aug else ""
+        print(f"  {path.name}: {len(starts)} windows{extra}, label={label}")
+    return np.stack(X), np.array(y), np.array(fid), np.array(pos), np.array(aug)

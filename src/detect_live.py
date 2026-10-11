@@ -9,6 +9,7 @@ Nemotron agent and the dashboard read.
 import argparse
 import collections
 import json
+import signal
 import time
 from pathlib import Path
 
@@ -19,7 +20,9 @@ import torch
 from features import COLS, FS, HOP, WIN, featurize
 from train import AutoEncoder, Classifier
 
-CONFIRM = 3     # consecutive anomalous windows before declaring a fault (~0.75 s)
+CONFIRM = 5     # consecutive anomalous windows before declaring a fault (~1.25 s).
+                # A single knock lands in at most 4 overlapping windows, so it can't trip this alone.
+NOTICES = {"disturbance"}   # recognised, reported, but never an alarm
 
 
 def load_models(path="model.pt"):
@@ -31,6 +34,14 @@ def load_models(path="model.pt"):
 
 SER = None      # open serial port, shared so agent motor commands can be sent
 CMD_FILE = Path("motor_cmd.txt")
+PROBE_FILE = Path("probe.json")   # present while the agent runs an active test
+
+
+def read_probe():
+    try:
+        return json.loads(PROBE_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 def forward_motor_cmd():
@@ -68,6 +79,21 @@ def replay_rows(path, speed=1.0):
 
 
 def main():
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
+    for f in (CMD_FILE, PROBE_FILE):          # clear leftovers from a previous run
+        f.unlink(missing_ok=True)
+    try:
+        run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if SER:
+            SER.write(b"S0\n")                # never leave the motor running
+            SER.close()
+            print(">>> motor stopped")
+
+
+def run():
     p = argparse.ArgumentParser()
     p.add_argument("--port")
     p.add_argument("--baud", type=int, default=921600)
@@ -82,6 +108,9 @@ def main():
 
     buf = collections.deque(maxlen=WIN)
     streak, since_hop, fault_start = 0, 0, None
+    probe_seen, hold_until, suspect = False, 0.0, None
+    settle_s = WIN / FS + HOP / FS             # time for the window to refill after a speed change
+    source = "replay" if args.replay else "live"
     for row in rows:
         buf.append(row)
         since_hop += 1
@@ -95,18 +124,31 @@ def main():
             score = float(((ae(x) - x) ** 2).mean()) / thr          # >1 means anomalous
             probs = torch.softmax(clf(x), 1)[0].numpy()
 
-        streak = streak + 1 if score > 1 else 0
         arr = np.array(buf)
-        if streak >= CONFIRM:
+        probe = read_probe()
+        if probe:                              # agent is testing: speed is deliberately off-normal
+            probe_seen, suspect = True, probe.get("suspect")
+        elif probe_seen:                       # test just ended: let the window refill
+            probe_seen, hold_until = False, time.time() + settle_s
+        testing = probe is not None or time.time() < hold_until
+
+        if testing:
+            fault, conf = suspect or "unknown_anomaly", 0.0
+            streak = CONFIRM - 1               # after the test, one abnormal window re-confirms at once
+        elif (streak := streak + 1 if score > 1 else 0) >= CONFIRM:
             ranked = [(classes[i], float(probs[i])) for i in np.argsort(-probs) if classes[i] != "normal"]
-            fault, conf = ranked[0]
+            # no fault recordings yet -> can't name it, but still flag it
+            fault, conf = ranked[0] if ranked else ("unknown_anomaly", min(1.0, score / 3))
             fault_start = fault_start or time.time()
         else:
             fault, conf, fault_start = "normal", float(probs[classes.index("normal")]), None
 
         state = {
             "time": time.time(),
-            "status": "FAULT" if fault != "normal" else "OK",
+            "status": "PROBE" if testing else
+                      ("OK" if fault == "normal" else ("NOTICE" if fault in NOTICES else "FAULT")),
+            "probe": probe,
+            "source": source,
             "fault": fault,
             "confidence": round(conf, 3),
             "anomaly_score": round(score, 3),          # 1.0 = threshold
