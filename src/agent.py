@@ -41,8 +41,9 @@ outside: motor current (amps) and vibration (accelerometer + gyro, bolted near t
 A trained detector model flags anomalies and guesses a fault class.
 
 Known faults and their physical signatures:
-- loose_fastener: a bearing-block screw backed off. Vibration RMS rises (rattling, impacts once
-  per revolution); current roughly unchanged. Risk: bearing misalignment, wear. Fix: retighten.
+- loose_fastener: a bearing-block screw backed off. The vibration PATTERN changes (rattling, impacts
+  once per revolution); overall vibration RMS may rise a lot or barely at all, depending on where
+  the sensor sits. Current roughly unchanged. Risk: bearing misalignment, wear. Fix: retighten.
 - belt_slip: belt tension lost. Current DROPS (the motor is less loaded); vibration irregular.
   Risk: output stops being driven, belt wear/heat. Fix: re-tension belt via slotted motor mount.
 - stall: something is braking the output. Current RISES sharply, motor slows. Risk: motor
@@ -66,6 +67,9 @@ Your job when a fault is flagged:
    score above 1), never conclude "no action needed" unless the active test showed the anomaly
    did NOT persist. If the evidence doesn't fit the named fault, say the cause is uncertain and
    still recommend an inspection. A ratio near 1.0 (0.9-1.1) means essentially unchanged.
+   The detector judges the full frequency pattern, not just overall RMS: a confident detector guess
+   (confidence above 0.7) with nothing contradicting it (e.g. current unchanged for a loose
+   fastener) should be reported as that fault, not as uncertain.
 3. If it is a stall with current above 0.6 A and the motor is still running, stop it. For other
    faults, do not stop the motor unless the evidence shows something dangerous.
 4. Reply in exactly this format, short, for an operator glancing at a screen:
@@ -303,17 +307,19 @@ Another agent has written a diagnosis. You get the raw measurements and its draf
 You cannot touch the machine; you only approve or send it back.
 
 Fault signatures (ratios compare to the healthy machine; 0.9-1.1 means unchanged):
-- loose_fastener: vibration clearly up (ratio well above 1), current about unchanged.
+- loose_fastener: vibration pattern changes (overall size may or may not rise), current about unchanged.
 - belt_slip: current DOWN (ratio below about 0.9).
 - stall: current UP sharply; dangerous above 0.6 A.
 - If the active test says persisted_after_retest = false, it was a transient knock, not a fault.
 
 The measurements include "signature_check", computed in code from the ratios. It is
-arithmetic, not opinion: trust it. If it says the named fault FITS, check 2 passes.
+arithmetic, not opinion: trust it. If it says CONSISTENT, check 2 passes. Overall vibration
+size is NOT a reason to fail a draft: the detector judges the vibration pattern, which the
+ratios don't capture.
 
 Checklist:
 1. Every number in EVIDENCE must match the measurements (small rounding is fine).
-2. The named fault must fit its signature: use signature_check.
+2. The named fault must not contradict its signature: use signature_check.
 3. ACTION must match the severity: a confirmed fault needs a physical repair step; "no action"
    is only acceptable when the active test showed the anomaly did not persist.
 4. Format must be the three lines FAULT / EVIDENCE / ACTION.
@@ -343,16 +349,19 @@ def signature_check(fault, trend, test):
                 "why": "active test: the anomaly vanished on retest, so it was transient"}
     if fault is None or v is None or c is None:
         return {"fault": fault, "fits": None, "why": "not enough data to check"}
+    # Only veto on a CONTRADICTION. Current is the reliable signal; vibration size alone is not
+    # (where the sensor sits changes it, and the detector judges the whole frequency pattern).
     rules = {
-        "loose_fastener": (v >= 1.5 and 0.85 <= c <= 1.25, "needs vibration ratio >= 1.5 with current ratio 0.85-1.25"),
-        "belt_slip":      (c < 0.9, "needs current ratio below 0.9"),
-        "stall":          (c > 1.15, "needs current ratio above 1.15"),
+        "loose_fastener": (0.8 <= c <= 1.25, "current should stay roughly unchanged (0.8-1.25x)"),
+        "belt_slip":      (c <= 1.05, "current should not rise (at most 1.05x)"),
+        "stall":          (c >= 0.95, "current should not drop (at least 0.95x)"),
     }
     if fault not in rules:          # unknown_anomaly etc.: nothing specific to contradict
         return {"fault": fault, "fits": None, "why": "no fixed signature for this name"}
     ok, need = rules[fault]
     return {"fault": fault, "fits": ok,
-            "why": f"{fault} {need}; measured vibration {v}x, current {c}x -> {'FITS' if ok else 'DOES NOT FIT'}"}
+            "why": f"{fault}: {need}; measured current {c}x, vibration {v}x -> "
+                   f"{'CONSISTENT' if ok else 'CONTRADICTS'}"}
 
 NO_ACTION = re.compile(r"\b(no (further )?(action|repair|maintenance|intervention)s?( is)?( needed| required| necessary)?"
                        r"|not (needed|required|necessary)|nothing to (do|fix)|all (good|fine)"
@@ -387,7 +396,7 @@ def review(model, draft, facts):
     problems = rule_checks(draft, facts)
     sig = signature_check(named_fault(draft), facts["sensor_trend_last_5s"], facts.get("active_test"))
     if sig["fits"] is False:
-        problems.append(f"the numbers don't fit {sig['fault']}: {sig['why']}")
+        problems.append(f"the numbers contradict {sig['fault']}: {sig['why']}")
     facts = {**facts, "signature_check": sig}
     msg = chat(model, [{"role": "system", "content": REVIEWER},
                        {"role": "user", "content": f"MEASUREMENTS:\n{json.dumps(facts, indent=1)}\n\n"
@@ -402,7 +411,7 @@ def review(model, draft, facts):
         if check is None and sig["fits"] is True and not problems:
             print(f"  [review] overruled (no check named; code checks all pass): {why}")
         elif check == "2" and sig["fits"] is True:
-            print(f"  [review] overruled (signature fits by calculation): {why}")
+            print(f"  [review] overruled (signature consistent by calculation): {why}")
         elif check == "4" and not any("format" in p for p in problems):
             print(f"  [review] overruled (format is fine): {why}")
         elif check == "3" and not any("no repair" in p for p in problems) and not NO_ACTION.search(
