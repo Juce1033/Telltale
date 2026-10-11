@@ -25,6 +25,7 @@ def main():
     p.add_argument("--label", default="normal", help="normal, loose_fastener, belt_slip, stall")
     p.add_argument("--seconds", type=float, default=60)
     p.add_argument("--outdir", default="data")
+    p.add_argument("--motor", type=int, default=70, help="motor speed %% to run while recording (0 = off)")
     args = p.parse_args()
 
     Path(args.outdir).mkdir(exist_ok=True)
@@ -33,6 +34,9 @@ def main():
     ser = serial.Serial(args.port, args.baud, timeout=1)
     time.sleep(2)              # ESP32 resets when the port opens
     ser.reset_input_buffer()   # throw away anything half-sent
+    ser.write(f"S{args.motor}\n".encode())   # ESP32 boots with motor stopped; start it
+    time.sleep(1.5)            # let the motor get up to speed before recording
+    ser.reset_input_buffer()
 
     n_rows, n_bad = 0, 0
     start = time.time()
@@ -57,6 +61,7 @@ def main():
                 rate = n_rows / (time.time() - start)
                 print(f"{n_rows} rows, ~{rate:.0f} samples/s, {n_bad} bad lines")
 
+    ser.write(b"S0\n")        # stop the motor when done
     ser.close()
     print(f"Saved {n_rows} rows to {out_path}")
 

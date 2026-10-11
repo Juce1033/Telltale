@@ -44,12 +44,13 @@ def forward_motor_cmd():
     print(f">>> motor command {cmd}" + ("" if SER else " (replay mode: not sent)"))
 
 
-def serial_rows(port, baud):
+def serial_rows(port, baud, motor):
     global SER
     import serial
     ser = SER = serial.Serial(port, baud, timeout=1)
     time.sleep(2)
     ser.reset_input_buffer()
+    ser.write(f"S{motor}\n".encode())     # ESP32 boots with motor stopped; start it
     while True:
         parts = ser.readline().decode("ascii", errors="ignore").strip().split(",")
         if len(parts) != 8:
@@ -71,12 +72,13 @@ def main():
     p.add_argument("--port")
     p.add_argument("--baud", type=int, default=921600)
     p.add_argument("--replay")
+    p.add_argument("--motor", type=int, default=70, help="motor speed %% (live mode)")
     p.add_argument("--speed", type=float, default=1.0, help="replay speed multiplier")
     args = p.parse_args()
 
     ae, clf, ck = load_models()
     mu, sd, thr, classes = ck["mu"], ck["sd"], ck["threshold"], ck["classes"]
-    rows = replay_rows(args.replay, args.speed) if args.replay else serial_rows(args.port, args.baud)
+    rows = replay_rows(args.replay, args.speed) if args.replay else serial_rows(args.port, args.baud, args.motor)
 
     buf = collections.deque(maxlen=WIN)
     streak, since_hop, fault_start = 0, 0, None
