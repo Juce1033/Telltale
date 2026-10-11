@@ -105,3 +105,25 @@ def load_dataset(folder="data", augment=True, train_frac=0.8, seed=0):
         extra = f" (+{n_aug} augmented)" if n_aug else ""
         print(f"  {path.name}: {len(starts)} windows{extra}, label={label}")
     return np.stack(X), np.array(y), np.array(fid), np.array(pos), np.array(aug)
+
+
+def healthy_reference(folder="data"):
+    """Typical healthy current and vibration (same math as detect_live.py), measured over
+    every 1-second window of the 'normal' recordings. The agent compares against this."""
+    cur, vib = [], []
+    for path in sorted(Path(folder).glob("*.csv")):
+        df = pd.read_csv(path)
+        if str(df["label"].iloc[0]).replace("-", "_") != "normal":
+            continue
+        arr = df[COLS].to_numpy(dtype=np.float64)
+        for st in range(0, len(arr) - WIN + 1, WIN):
+            w = arr[st:st + WIN]
+            cur.append(w[:, 1].mean())
+            acc = w[:, 2:5] - w[:, 2:5].mean(0)
+            vib.append(float(np.sqrt((acc ** 2).mean())))
+    if not cur:
+        return None
+    return {"current_a": round(float(np.mean(cur)), 4),
+            "current_a_range": [round(float(np.percentile(cur, 1)), 4), round(float(np.percentile(cur, 99)), 4)],
+            "vibration_rms": round(float(np.mean(vib)), 4),
+            "vibration_rms_p99": round(float(np.percentile(vib, 99)), 4)}

@@ -42,6 +42,7 @@
     --btn-edge: #9ea398;
     --acted-bg: #f7e3df;
     --tested-bg: #e1eaf6;
+    --rv-bg: #e2f2e4; --rv-line: #2e8a3e;
     --kbd-bg: #e3e7df;
     --bezel-hi: rgba(255,255,255,.55);
     --wash: rgba(244,168,58,.20);
@@ -71,6 +72,7 @@
     --btn-edge: #0f1214;
     --acted-bg: #3b1f1b;
     --tested-bg: #19263a;
+    --rv-bg: #17301c; --rv-line: #6cc47a;
     --kbd-bg: #2b3134;
     --bezel-hi: rgba(255,255,255,.05);
     --wash: rgba(244,168,58,.16);
@@ -94,6 +96,7 @@
     --btn-edge: #0f1214;
     --acted-bg: #3b1f1b;
     --tested-bg: #19263a;
+    --rv-bg: #17301c; --rv-line: #6cc47a;
     --kbd-bg: #2b3134;
     --bezel-hi: rgba(255,255,255,.05);
     --wash: rgba(244,168,58,.16);
@@ -171,10 +174,21 @@
   .ticket .acted { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--stop);
                    background: var(--acted-bg); font-size: 15px; }
   .ticket .empty { color: var(--ink-soft); }
-  .ticket .past dl, .ticket .past .tested, .ticket .past .acted { opacity: .5; }
+  .ticket .past dl, .ticket .past .tested, .ticket .past .acted, .ticket .past .review { opacity: .5; }
   .ticket .past-label { font-size: 14px; color: var(--ink-soft); margin-bottom: 8px; }
   .ticket .tested { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--pen-blue);
                     background: var(--tested-bg); font-size: 15px; }
+
+  .ticket .review { margin-top: 10px; padding: 8px 10px; font-size: 15px;
+                    border-left: 3px solid var(--rv-line); background: var(--rv-bg); }
+  .ticket .review.fixed { border-left-color: var(--pen-blue); background: var(--tested-bg); }
+  .ticket .review.disputed { border-left-color: var(--stop); background: var(--acted-bg); }
+  .ticket .review details { margin-top: 4px; color: var(--ink-soft); }
+  .ticket .review summary { cursor: pointer; }
+  .ticket .working { font: 700 22px/1.2 var(--cond); }
+  .ticket .working::after { content: ""; display: inline-block; width: 1.2em; text-align: left;
+                            animation: dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 
   .tally { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
   .tally .v { font: 700 36px/1 var(--cond); }
@@ -270,7 +284,7 @@
 
     <div class="card ticket" id="ticket">
       <h2>Maintenance Agent</h2>
-      <div id="ticket-body" class="empty">Nemotron reviews each fault the detector raises and writes it up here.</div>
+      <div id="ticket-body" class="empty">Nemotron diagnoses each fault the detector raises, a second agent checks it, and it's written up here.</div>
     </div>
 
     <div class="card">
@@ -488,9 +502,20 @@ function renderTicket(a, now, s) {
       It returns to normal speed and is measured again before Nemotron writes its diagnosis.</div>`;
     return;
   }
+  const STAGES = {
+    diagnosing: ["Nemotron Is Diagnosing", "Reading the sensors and writing up the fault."],
+    reviewing:  ["Second Agent Is Reviewing", "A second Nemotron is checking the diagnosis against the raw numbers."],
+    revising:   ["Sent Back for a Fix", "The reviewer found a problem. The first agent is correcting its diagnosis."],
+  };
+  if (a && a.stage && !a.diagnosis && s && s.status === "FAULT") {
+    const [h, t] = STAGES[a.stage] || ["Working", ""];
+    $("ticket-body").className = "";
+    $("ticket-body").innerHTML = `<div class="working">${h}</div><div style="margin-top:6px">${t}</div>`;
+    return;
+  }
   if (!a || !a.diagnosis) {
     $("ticket-body").className = "empty";
-    $("ticket-body").textContent = "Nemotron reviews each fault the detector raises and writes it up here.";
+    $("ticket-body").textContent = "Nemotron diagnoses each fault the detector raises, a second agent checks it, and it's written up here.";
     return;
   }
   const lines = {};
@@ -511,6 +536,15 @@ function renderTicket(a, now, s) {
   }
   if (a.test_summary) html += `<div class="tested"><b>Active Test.</b> ${esc(a.test_summary)}</div>`;
   if (a.actions && a.actions.length) html += `<div class="acted">The agent acted: ${esc(a.actions.join("; "))}</div>`;
+  const r = a.review;
+  if (r && r.status === "approved")
+    html += `<div class="review"><b>Reviewed ✓</b> A second agent checked this against the sensor data and approved it.</div>`;
+  else if (r && r.status === "revised")
+    html += `<div class="review fixed"><b>Corrected by Reviewer.</b> ${esc(r.reason)}
+      <details><summary>First draft</summary>${esc(r.first_draft || "")}</details></div>`;
+  else if (r && r.status === "disputed")
+    html += `<div class="review disputed"><b>Reviewer Still Disagrees.</b> ${esc(r.still || r.reason)} Check it yourself before acting.
+      <details><summary>First draft</summary>${esc(r.first_draft || "")}</details></div>`;
   const agoText = ago < 90 ? `${ago} s ago` : `${Math.round(ago / 60)} min ago`;
   html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${agoText}</div>`;
   // once the machine is healthy again, the last report is history, not a live alarm

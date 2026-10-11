@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from features import NOT_FAULTS, load_dataset
+from features import NOT_FAULTS, healthy_reference, load_dataset
 
 torch.manual_seed(0)
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -101,8 +101,12 @@ def main():
             note = "  (flagged % = detection rate)"
         print(f"{c:<16}{flagged:>17.0%}{right:>18.0%}{note}")
 
+    healthy = healthy_reference("data")
+    if healthy:
+        print(f"\nhealthy reference: {healthy['current_a']} A, vibration {healthy['vibration_rms']} g")
     torch.save({"ae": ae.state_dict(), "clf": clf.state_dict(), "mu": mu, "sd": sd,
-                "threshold": threshold, "classes": classes, "d": X.shape[1]}, "model.pt")
+                "threshold": threshold, "classes": classes, "d": X.shape[1],
+                "healthy": healthy}, "model.pt")
     print("\nsaved model.pt")
 
 

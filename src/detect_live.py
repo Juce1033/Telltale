@@ -23,6 +23,8 @@ from train import AutoEncoder, Classifier
 CONFIRM = 5     # consecutive anomalous windows before declaring a fault (~1.25 s).
                 # A single knock lands in at most 4 overlapping windows, so it can't trip this alone.
 NOTICES = {"disturbance"}   # recognised, reported, but never an alarm
+MIN_CONF = 0.5              # below this, don't guess a name: report an unrecognised fault
+KNOCK_MAX_S = 3.0           # a knock is over in a moment; anything abnormal for longer is a fault
 
 
 def load_models(path="model.pt"):
@@ -140,6 +142,12 @@ def run():
             # no fault recordings yet -> can't name it, but still flag it
             fault, conf = ranked[0] if ranked else ("unknown_anomaly", min(1.0, score / 3))
             fault_start = fault_start or time.time()
+            # the classifier always picks its closest known class, even for something new;
+            # don't trust a weak guess, and never let a long-lasting anomaly pass as a knock
+            if fault != "unknown_anomaly" and conf < MIN_CONF:
+                fault = "unknown_anomaly"
+            elif fault in NOTICES and time.time() - fault_start > KNOCK_MAX_S:
+                fault = "unknown_anomaly"
         else:
             fault, conf, fault_start = "normal", float(probs[classes.index("normal")]), None
 
@@ -149,6 +157,7 @@ def run():
                       ("OK" if fault == "normal" else ("NOTICE" if fault in NOTICES else "FAULT")),
             "probe": probe,
             "source": source,
+            "healthy_ref": ck.get("healthy"),            # from the training recordings
             "fault": fault,
             "confidence": round(conf, 3),
             "anomaly_score": round(score, 3),          # 1.0 = threshold

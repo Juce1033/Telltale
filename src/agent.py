@@ -62,6 +62,10 @@ How to read it:
 Your job when a fault is flagged:
 1. Read the active test results if present. Call tools if you need more evidence.
 2. Decide whether the evidence actually supports the detector's guess. Say so if it doesn't.
+   The detector is a trained model and its alarm is reliable: if it flagged a fault (anomaly
+   score above 1), never conclude "no action needed" unless the active test showed the anomaly
+   did NOT persist. If the evidence doesn't fit the named fault, say the cause is uncertain and
+   still recommend an inspection. A ratio near 1.0 (0.9-1.1) means essentially unchanged.
 3. If it is a stall with current above 0.6 A and the motor is still running, stop it. For other
    faults, do not stop the motor unless the evidence shows something dangerous.
 4. Reply in exactly this format, short, for an operator glancing at a screen:
@@ -107,16 +111,45 @@ def tool_get_detector_output():
     return history[-1] if history else {"error": "no detector data yet"}
 
 
+_healthy_cache = {}
+
+
+def healthy_from_data():
+    """For a model.pt trained before it stored the healthy reference: measure it from data/."""
+    if "ref" not in _healthy_cache:
+        try:
+            from features import healthy_reference
+            _healthy_cache["ref"] = healthy_reference("data")
+        except Exception as e:
+            print(f"couldn't read healthy recordings: {e}")
+            _healthy_cache["ref"] = None
+    return _healthy_cache["ref"]
+
+
 def tool_get_sensor_trend(seconds=5):
     now = time.time()
     recent = [s for s in history if now - s["time"] <= float(seconds)]
-    healthy = [s for s in history if s["status"] == "OK"]
+    ref = (history[-1].get("healthy_ref") if history else None) or healthy_from_data()
+    if ref:      # the healthy machine as measured in the training recordings
+        base_cur, base_vib = ref["current_a"], ref["vibration_rms"]
+        source = "training recordings of the healthy machine"
+    else:        # older model without a reference: fall back to recent healthy readings
+        healthy = [s for s in history if s["status"] == "OK"]
+        base_cur = mean([s["current_mean_a"] for s in healthy])
+        base_vib = mean([s["vibration_rms"] for s in healthy])
+        source = "recent readings marked healthy (less reliable)"
+    vib_now = mean([s["vibration_rms"] for s in recent])
+    cur_now = mean([s["current_mean_a"] for s in recent])
     return {
         "window_s": seconds,
-        "current_now_a": mean([s["current_mean_a"] for s in recent]),
-        "current_baseline_a": mean([s["current_mean_a"] for s in healthy]),
-        "vibration_rms_now": mean([s["vibration_rms"] for s in recent]),
-        "vibration_rms_baseline": mean([s["vibration_rms"] for s in healthy]),
+        "baseline_source": source,
+        "current_now_a": cur_now,
+        "current_baseline_a": base_cur,
+        "current_ratio": round(cur_now / base_cur, 2) if cur_now and base_cur else None,
+        "vibration_rms_now": vib_now,
+        "vibration_rms_baseline": base_vib,
+        "vibration_ratio": round(vib_now / base_vib, 2) if vib_now and base_vib else None,
+        "healthy_vibration_upper_limit": ref.get("vibration_rms_p99") if ref else None,
         "max_anomaly_score": max((s["anomaly_score"] for s in recent), default=None),
         "seconds_in_fault": recent[-1]["fault_active_s"] if recent else 0,
     }
@@ -259,16 +292,93 @@ def warm_up(model):
     print(f"model loaded and warm ({time.time() - t0:.1f}s)")
 
 
+REVIEWER = """You are the second-opinion reviewer for a maintenance agent watching a small test
+machine (12V gearmotor, belt drive, two bearing blocks; sensed by motor current and vibration).
+Another agent has written a diagnosis. You get the raw measurements and its draft. Check it.
+You cannot touch the machine; you only approve or send it back.
+
+Fault signatures (ratios compare to the healthy machine; 0.9-1.1 means unchanged):
+- loose_fastener: vibration clearly up (ratio well above 1), current about unchanged.
+- belt_slip: current DOWN (ratio below about 0.9).
+- stall: current UP sharply; dangerous above 0.6 A.
+- If the active test says persisted_after_retest = false, it was a transient knock, not a fault.
+
+Checklist:
+1. Every number in EVIDENCE must match the measurements (small rounding is fine).
+2. The named fault must fit its signature in the measurements. If the measurements clearly
+   point to a different fault, or to none, it fails.
+3. ACTION must match the severity: a confirmed fault needs a physical repair step; "no action"
+   is only acceptable when the active test showed the anomaly did not persist.
+4. Format must be the three lines FAULT / EVIDENCE / ACTION.
+Do not fail a draft over wording or style. Approve unless something above is actually wrong.
+
+Reply with exactly one of:
+VERDICT: APPROVE
+or
+VERDICT: REVISE
+REASON: <one sentence: what is wrong and what the measurements actually show>"""
+
+NO_ACTION = re.compile(r"\b(no (further )?(action|repair|maintenance|intervention)s?( is)?( needed| required| necessary)?"
+                       r"|not (needed|required|necessary)|nothing to (do|fix)|all (good|fine)"
+                       r"|continue (normal )?operation)\b", re.I)
+
+
+def parse_lines(text):
+    out = {}
+    for l in (text or "").splitlines():
+        m = re.match(r"\s*(FAULT|EVIDENCE|ACTION)\s*:\s*(.*)$", l, re.I)
+        if m:
+            out[m.group(1).upper()] = m.group(2).strip()
+    return out
+
+
+def rule_checks(draft, facts):
+    """Hard checks in plain code. The reviewer can't overrule these."""
+    problems, lines = [], parse_lines(draft)
+    missing = [k for k in ("FAULT", "EVIDENCE", "ACTION") if k not in lines]
+    if missing:
+        problems.append(f"missing the {', '.join(missing)} line(s) of the required format")
+    test = facts.get("active_test") or {}
+    transient = test.get("persisted_after_retest") is False
+    if lines.get("ACTION") and NO_ACTION.search(lines["ACTION"]) and not transient:
+        problems.append("it said no repair was needed, but the fault is confirmed and the active test didn't clear it")
+    return problems
+
+
+def review(model, draft, facts):
+    """Second Nemotron call: approve the draft or say what's wrong with it."""
+    problems = rule_checks(draft, facts)
+    msg = chat(model, [{"role": "system", "content": REVIEWER},
+                       {"role": "user", "content": f"MEASUREMENTS:\n{json.dumps(facts, indent=1)}\n\n"
+                                                   f"DRAFT DIAGNOSIS:\n{draft}"}], tools=None)
+    text = re.sub(r"<think>.*?</think>", "", msg.get("content", ""), flags=re.S).strip()
+    reason = re.search(r"REASON\s*:\s*(.+)", text, re.I)
+    if re.search(r"VERDICT\s*:\s*REVISE", text, re.I):
+        problems.append(reason.group(1).strip() if reason else "the reviewer found a problem")
+    elif not re.search(r"VERDICT\s*:\s*APPROVE", text, re.I) and not problems:
+        print(f"  [review] unclear reply, treating as approved: {text[:80]!r}")
+    return problems
+
+
+def set_stage(stage, trigger):
+    """Tell the dashboard what the agents are doing right now (no diagnosis yet)."""
+    tmp = OUT.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"time": time.time(), "stage": stage, "detector_fault": trigger["fault"]}))
+    tmp.replace(OUT)
+
+
 def investigate(model, trigger, cfg):
     t0 = time.time()
     actions.clear()
     test = None
     if cfg["probe"] == "auto" and trigger.get("source") == "live":
         print(f"  [active test] {cfg['base_speed']}% -> {cfg['probe_speed']}% -> {cfg['base_speed']}%")
-        test = run_active_test(trigger, cfg["base_speed"], cfg["probe_speed"], cfg["baseline_low"])
+        baseline = load_baseline(cfg["probe_speed"])     # re-read: it may have been recorded since startup
+        test = run_active_test(trigger, cfg["base_speed"], cfg["probe_speed"], baseline)
         print(f"  [active test] {summarize_test(test)}")
     note = (f"Active test results: {json.dumps(test)}" if test else
             "No active test was run (replay data or testing disabled); rely on the tools.")
+    set_stage("diagnosing", trigger)
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": f"The detector just flagged: {trigger['fault']} "
                                             f"(confidence {trigger['confidence']}). {note} Investigate."}]
@@ -289,9 +399,37 @@ def investigate(model, trigger, cfg):
             messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result)})
 
     reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.S).strip()
+
+    # ---- second opinion: a fresh Nemotron call checks the draft against the raw numbers
+    rev = None
+    if cfg.get("review", True):
+        t1 = time.time()
+        set_stage("reviewing", trigger)
+        facts = {"detector": {k: trigger.get(k) for k in ("fault", "confidence", "anomaly_score")},
+                 "sensor_trend_last_5s": tool_get_sensor_trend(5),
+                 "active_test": test, "motor_commands_sent": list(actions)}
+        problems = review(model, reply, facts)
+        rev = {"status": "approved", "reason": None, "first_draft": None}
+        if problems:
+            reason = "; ".join(problems)
+            print(f"  [review] sent back: {reason}")
+            set_stage("revising", trigger)
+            messages.append({"role": "user", "content":
+                f"A second reviewer rejected your diagnosis: {reason}. Measurements: {json.dumps(facts)}. "
+                "Write a corrected diagnosis in exactly the same three-line format."})
+            fixed = re.sub(r"<think>.*?</think>", "", chat(model, messages, tools=None).get("content", ""),
+                           flags=re.S).strip()
+            still = review(model, fixed, facts) if fixed else ["empty revision"]
+            rev = {"status": "revised" if not still else "disputed", "reason": reason,
+                   "still": "; ".join(still) or None, "first_draft": reply}
+            reply = fixed or reply
+        else:
+            print("  [review] approved")
+        rev["latency_s"] = round(time.time() - t1, 1)
+
     out = {"time": time.time(), "detector_fault": trigger["fault"], "diagnosis": reply,
            "actions": list(actions), "latency_s": round(time.time() - t0, 1),
-           "test": test, "test_summary": summarize_test(test)}
+           "test": test, "test_summary": summarize_test(test), "review": rev}
     tmp = OUT.with_suffix(".json.tmp")           # write then swap, so the dashboard never reads half a file
     tmp.write_text(json.dumps(out))
     tmp.replace(OUT)
@@ -301,15 +439,15 @@ def investigate(model, trigger, cfg):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", default="nemotron3:33b")
+    p.add_argument("--no-review", action="store_true", help="skip the second-opinion reviewer")
     p.add_argument("--think", action="store_true", help="enable reasoning mode (slower, smarter)")
-    p.add_argument("--cooldown", type=float, default=20, help="seconds before re-diagnosing same fault")
     p.add_argument("--probe", choices=["auto", "off"], default="auto", help="run the active test")
     p.add_argument("--probe-speed", type=int, default=45)
     p.add_argument("--base-speed", type=int, default=70, help="must match detect_live.py --motor")
     args = p.parse_args()
 
     THINK["value"] = args.think
-    cfg = {"probe": args.probe, "probe_speed": args.probe_speed, "base_speed": args.base_speed,
+    cfg = {"review": not args.no_review, "probe": args.probe, "probe_speed": args.probe_speed, "base_speed": args.base_speed,
            "baseline_low": load_baseline(args.probe_speed)}
     if args.probe == "auto":
         b = cfg["baseline_low"]
@@ -326,11 +464,16 @@ def main():
         except (FileNotFoundError, json.JSONDecodeError):
             time.sleep(0.25)
             continue
+        if history and s["time"] - history[-1]["time"] > 3:
+            # a gap in the readings means a new run started: forget the previous one
+            history.clear()
+            last_fault, timing["ok_since"] = None, None
         if not history or s["time"] != history[-1]["time"]:
             history.append(s)
 
-        new_fault = s["status"] == "FAULT" and (
-            s["fault"] != last_fault or time.time() - timing["last"] > args.cooldown)
+        # one diagnosis per fault: re-investigate only for a different fault, or the same one
+        # coming back after the machine has been healthy for a while (last_fault reset below)
+        new_fault = s["status"] == "FAULT" and s["fault"] != last_fault
         if new_fault and not busy.is_set():
             last_fault, timing["last"] = s["fault"], time.time()
             busy.set()
@@ -342,7 +485,6 @@ def main():
                 except Exception as e:
                     print(f"agent error: {e}")
                 finally:
-                    timing["last"] = time.time()     # cooldown counts from the end of the work
                     busy.clear()
             threading.Thread(target=job, daemon=True).start()
         # forget the last fault only after the machine has been healthy for a while,
