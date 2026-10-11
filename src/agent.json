@@ -1,0 +1,1 @@
+{"time": 1791702710.9908156, "detector_fault": "loose_fastener", "diagnosis": "FAULT: loose_fastener (high)  \nEVIDENCE: Vibration RMS rose to 0.0488 (baseline 0.0287) while current remained near baseline at 0.116\u202fA, matching the loose\u2011fastener signature.  \nACTION: Retighten the bearing\u2011block screw (do not stop the motor).", "actions": [], "latency_s": 11.3}
