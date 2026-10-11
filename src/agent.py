@@ -127,8 +127,11 @@ def healthy_from_data():
 
 
 def tool_get_sensor_trend(seconds=5):
-    now = time.time()
-    recent = [s for s in history if now - s["time"] <= float(seconds)]
+    # last N seconds of DATA (not of the clock): still works after a replay ends or is stopped
+    now = history[-1]["time"] if history else time.time()
+    recent = [s for s in history if now - s["time"] <= float(seconds) and s["status"] != "PROBE"]
+    faulty = [s for s in recent if s["status"] == "FAULT"]
+    recent = faulty or recent                   # describe the fault itself, not the moments around it
     ref = (history[-1].get("healthy_ref") if history else None) or healthy_from_data()
     if ref:      # the healthy machine as measured in the training recordings
         base_cur, base_vib = ref["current_a"], ref["vibration_rms"]
@@ -142,6 +145,8 @@ def tool_get_sensor_trend(seconds=5):
     cur_now = mean([s["current_mean_a"] for s in recent])
     return {
         "window_s": seconds,
+        "units": "current in amps (A); vibration is acceleration RMS in g",
+        "readings_used": len(recent),
         "baseline_source": source,
         "current_now_a": cur_now,
         "current_baseline_a": base_cur,
@@ -310,7 +315,8 @@ Checklist:
 3. ACTION must match the severity: a confirmed fault needs a physical repair step; "no action"
    is only acceptable when the active test showed the anomaly did not persist.
 4. Format must be the three lines FAULT / EVIDENCE / ACTION.
-Do not fail a draft over wording or style. Approve unless something above is actually wrong.
+A value that is null or missing means no data, NOT evidence against the draft: never fail a draft
+because of it; judge only the values that are present. Do not fail a draft over wording or style. Approve unless something above is actually wrong.
 
 Reply with exactly one of:
 VERDICT: APPROVE
@@ -408,8 +414,11 @@ def investigate(model, trigger, cfg):
         facts = {"detector": {k: trigger.get(k) for k in ("fault", "confidence", "anomaly_score")},
                  "sensor_trend_last_5s": tool_get_sensor_trend(5),
                  "active_test": test, "motor_commands_sent": list(actions)}
-        problems = review(model, reply, facts)
-        rev = {"status": "approved", "reason": None, "first_draft": None}
+        if not facts["sensor_trend_last_5s"]["readings_used"]:
+            problems, rev = [], {"status": "skipped", "reason": "no sensor readings left to check against"}
+        else:
+            problems = review(model, reply, facts)
+            rev = {"status": "approved", "reason": None, "first_draft": None}
         if problems:
             reason = "; ".join(problems)
             print(f"  [review] sent back: {reason}")
@@ -424,7 +433,7 @@ def investigate(model, trigger, cfg):
                    "still": "; ".join(still) or None, "first_draft": reply}
             reply = fixed or reply
         else:
-            print("  [review] approved")
+            print(f"  [review] {rev['status']}")
         rev["latency_s"] = round(time.time() - t1, 1)
 
     out = {"time": time.time(), "detector_fault": trigger["fault"], "diagnosis": reply,

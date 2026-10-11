@@ -184,7 +184,8 @@
   .ticket .review.fixed { border-left-color: var(--pen-blue); background: var(--tested-bg); }
   .ticket .review.disputed { border-left-color: var(--stop); background: var(--acted-bg); }
   .ticket .review details { margin-top: 4px; color: var(--ink-soft); }
-  .ticket .review summary { cursor: pointer; }
+  .ticket .review summary { cursor: pointer; white-space: normal; }
+  .ticket .review details { white-space: pre-line; }
   .ticket .working { font: 700 22px/1.2 var(--cond); }
   .ticket .working::after { content: ""; display: inline-block; width: 1.2em; text-align: left;
                             animation: dots 1.2s steps(4) infinite; }
@@ -496,6 +497,7 @@ function renderTicket(a, now, s) {
   if (s && s.status === "PROBE") {
     testing = true;
     const sp = (s.probe && s.probe.speed) || "a lower";
+    ticketKey = null;
     $("ticket-body").className = "";
     $("ticket-body").innerHTML = `<div class="fault-line" style="font:700 22px/1.2 var(--cond)">Running an Active Test</div>
       <div style="margin-top:6px">Motor slowed to ${sp}% to check whether the ${esc(title(s.fault).toLowerCase())} is real.
@@ -509,11 +511,13 @@ function renderTicket(a, now, s) {
   };
   if (a && a.stage && !a.diagnosis && s && s.status === "FAULT") {
     const [h, t] = STAGES[a.stage] || ["Working", ""];
+    ticketKey = null;
     $("ticket-body").className = "";
     $("ticket-body").innerHTML = `<div class="working">${h}</div><div style="margin-top:6px">${t}</div>`;
     return;
   }
   if (!a || !a.diagnosis) {
+    ticketKey = null;
     $("ticket-body").className = "empty";
     $("ticket-body").textContent = "Nemotron diagnoses each fault the detector raises, a second agent checks it, and it's written up here.";
     return;
@@ -545,6 +549,8 @@ function renderTicket(a, now, s) {
   else if (r && r.status === "disputed")
     html += `<div class="review disputed"><b>Reviewer Still Disagrees.</b> ${esc(r.still || r.reason)} Check it yourself before acting.
       <details><summary>First draft</summary>${esc(r.first_draft || "")}</details></div>`;
+  else if (r && r.status === "skipped")
+    html += `<div class="note" style="margin-top:10px">Not reviewed: ${esc(r.reason)}.</div>`;
   const agoText = ago < 90 ? `${ago} s ago` : `${Math.round(ago / 60)} min ago`;
   html += `<div class="note" style="margin-top:10px">Written in ${a.latency_s} s, ${agoText}</div>`;
   // once the machine is healthy again, the last report is history, not a live alarm
@@ -553,8 +559,24 @@ function renderTicket(a, now, s) {
   const resolved = healthy || idle;
   if (healthy) html = `<div class="past-label">Previous fault. The machine is running normally now.</div>` + html;
   else if (idle) html = `<div class="past-label">From the last run.</div>` + html;
+  setTicket(html, resolved ? "past" : "");
+}
+
+// Only rebuild the ticket when its content changes. Rebuilding several times a second would
+// snap the "First draft" dropdown shut; the "s ago" timer is updated on its own instead.
+let ticketKey = null;
+function setTicket(html, cls) {
   const body = $("ticket-body");
-  body.className = resolved ? "past" : ""; body.innerHTML = html;
+  const m = html.match(/<div class="note" style="margin-top:10px">Written in [^<]*<\/div>/);
+  const key = cls + html.replace(m ? m[0] : "", "");
+  if (key !== ticketKey) {
+    ticketKey = key;
+    body.className = cls;
+    body.innerHTML = html.replace(m ? m[0] : "", m ? m[0].replace('class="note"', 'class="note" id="tk-ago"') : "");
+  } else if (m) {
+    const ago = $("tk-ago");
+    if (ago) ago.outerHTML = m[0].replace('class="note"', 'class="note" id="tk-ago"');
+  }
 }
 
 // ---------- drills ----------
