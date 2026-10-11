@@ -10,6 +10,7 @@ import argparse
 import collections
 import json
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -28,9 +29,25 @@ def load_models(path="model.pt"):
     return ae, clf, ck
 
 
+SER = None      # open serial port, shared so agent motor commands can be sent
+CMD_FILE = Path("motor_cmd.txt")
+
+
+def forward_motor_cmd():
+    """The agent writes e.g. 'S0' to motor_cmd.txt; pass it to the ESP32."""
+    if not CMD_FILE.exists():
+        return
+    cmd = CMD_FILE.read_text().strip()
+    CMD_FILE.unlink()
+    if SER:
+        SER.write((cmd + "\n").encode())
+    print(f">>> motor command {cmd}" + ("" if SER else " (replay mode: not sent)"))
+
+
 def serial_rows(port, baud):
+    global SER
     import serial
-    ser = serial.Serial(port, baud, timeout=1)
+    ser = SER = serial.Serial(port, baud, timeout=1)
     time.sleep(2)
     ser.reset_input_buffer()
     while True:
@@ -69,6 +86,7 @@ def main():
         if len(buf) < WIN or since_hop < HOP:
             continue
         since_hop = 0
+        forward_motor_cmd()
 
         x = torch.tensor((featurize(np.array(buf)) - mu) / sd, dtype=torch.float32)[None]
         with torch.no_grad():
