@@ -25,6 +25,8 @@ CONFIRM = 5     # consecutive anomalous windows before declaring a fault (~1.25 
 NOTICES = {"disturbance"}   # recognised, reported, but never an alarm
 MIN_CONF = 0.5              # below this, don't guess a name: report an unrecognised fault
 KNOCK_MAX_S = 3.0           # a knock is over in a moment; anything abnormal for longer is a fault
+SMOOTH = 8                  # name the fault from the average of the last 8 windows (~2 s), so one odd
+                            # window (e.g. while someone is still turning the screwdriver) can't flip it
 
 
 def load_models(path="model.pt"):
@@ -116,6 +118,7 @@ def run():
     source = "replay" if args.replay else "live"
     motor_off, stopped_for = False, "normal"   # live only: motor stopped on purpose (stall stop, Stop button)
     restart_at = None                          # after a restart, stay "stopped" until spin-up + window refill
+    recent_probs = collections.deque(maxlen=SMOOTH)
     for row in rows:
         buf.append(row)
         since_hop += 1
@@ -135,6 +138,11 @@ def run():
         with torch.no_grad():
             score = float(((ae(x) - x) ** 2).mean()) / thr          # >1 means anomalous
             probs = torch.softmax(clf(x), 1)[0].numpy()
+        if score > 1:
+            recent_probs.append(probs)
+            probs = np.mean(recent_probs, axis=0)      # smoothed guess across the abnormal stretch
+        else:
+            recent_probs.clear()
 
         arr = np.array(buf)
         probe = read_probe()

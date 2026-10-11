@@ -33,6 +33,7 @@ import pandas as pd
 OLLAMA = "http://localhost:11434/api/chat"
 STATE, OUT, CMD = Path("state.json"), Path("agent.json"), Path("motor_cmd.txt")
 PROBE = Path("probe.json")
+SETTLE_S = 2.0          # seconds a fault must last before the agent starts diagnosing it
 SAFETY_STOP_A = 0.6        # stop immediately above this current, no questions asked
 
 SYSTEM = """You are the maintenance agent for a small test machine: a 12V gearmotor drives a
@@ -554,7 +555,9 @@ def main():
 
         # one diagnosis per fault: re-investigate only for a different fault, or the same one
         # coming back after the machine has been healthy for a while (last_fault reset below)
-        new_fault = s["status"] == "FAULT" and s["fault"] != last_fault
+        # wait until the fault has lasted 2 s, so the name has settled before diagnosing it
+        new_fault = (s["status"] == "FAULT" and s["fault"] != last_fault
+                     and s.get("fault_active_s", 0) >= SETTLE_S)
         if new_fault and not busy.is_set():
             last_fault, timing["last"] = s["fault"], time.time()
             busy.set()
