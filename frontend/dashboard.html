@@ -454,8 +454,9 @@ function drawStrip(hist, now) {
     g.stroke(); g.restore();
 
     // latest value, in the right gutter beside the end of the trace
-    if (hist.length) {
-      const v = hist[hist.length - 1][ln.key];
+    const lastPt = hist[hist.length - 1];
+    if (lastPt && now - lastPt.t < 2) {            // only label live data, never a stale reading
+      const v = lastPt[ln.key];
       const y = Math.min(y1 - 2, Math.max(y0 + 12, Y(v) + 5));
       g.fillStyle = cssv(ln.pen); g.textAlign = "left"; g.font = "700 16px Barlow Condensed, sans-serif";
       g.fillText(v.toFixed(ln.dec === 1 ? 2 : ln.dec), W - right + 8, y);
