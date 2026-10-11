@@ -378,7 +378,7 @@ function setMeter(id, value, unit, digits, hot) {
 const LANES = [
   { key: "cur",   pen: "--pen-blue",     label: "Current (A)",       floor: 0, dec: 2, span: 0.3 },
   { key: "vib",   pen: "--pen-red",      label: "Vibration (g)",     floor: 0, dec: 3, span: 0.06 },
-  { key: "score", pen: "--pen-graphite", label: "Anomaly Score",    floor: 0, dec: 1, min: 0, max: 1.6, alarm: 1 },
+  { key: "score", pen: "--pen-graphite", label: "Anomaly Score",    floor: 0, dec: 1, min: 0, max: 1.6, alarm: 1, cap: 5 },
 ];
 function drawStrip(hist, now) {
   const cv = $("strip"), dpr = window.devicePixelRatio || 1;
@@ -409,6 +409,7 @@ function drawStrip(hist, now) {
     const minSpan = ln.span || 1e-6;
     if (hi - lo < minSpan) { const mid = (hi + lo) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; }
     const pad = (hi - lo) * .15; lo = Math.max(ln.floor, lo - pad); hi += pad;
+    if (ln.cap) hi = Math.min(hi, ln.cap);       // huge scores ride the top edge; the label shows the real value
     const Y = v => y1 - (v - lo) / (hi - lo) * laneH;
 
     // vertical grid inside this graph only, every 5 s (bold every 10 s)
@@ -427,7 +428,8 @@ function drawStrip(hist, now) {
     }
     g.fillStyle = cssv("--ink-soft"); g.font = "500 13px Barlow, sans-serif"; g.textAlign = "right";
     g.fillText(hi.toFixed(ln.dec), left - 6, y0 + 10);
-    g.fillText(lo.toFixed(ln.dec), left - 6, y1);
+    if (!(ln.alarm !== undefined && Math.abs(Y(ln.alarm) - y1) < 16))   // don't print over the alarm value
+      g.fillText(lo.toFixed(ln.dec), left - 6, y1);
     g.textAlign = "left"; g.font = "700 16px Barlow Condensed, sans-serif"; g.fillStyle = cssv(ln.pen);
     g.fillText(ln.label, left + 10, y0 + 19);
 
@@ -435,8 +437,10 @@ function drawStrip(hist, now) {
     hist.forEach((h, j) => {
       if (h.status !== "FAULT" && h.status !== "PROBE") return;
       g.fillStyle = h.status === "FAULT" ? cssv("--wash") : cssv("--wash-test");
-      const xa = X(h.t), xb = j + 1 < hist.length ? X(hist[j + 1].t) : W - right;
-      g.fillRect(xa, y0, Math.max(1, xb - xa), laneH);
+      // each reading covers until the next one (at most half a second), never past the data
+      const tEnd = j + 1 < hist.length ? Math.min(hist[j + 1].t, h.t + 0.5) : h.t + 0.25;
+      const xa = Math.max(left, X(h.t)), xb = Math.min(W - right, X(tEnd));
+      if (xb > xa) g.fillRect(xa, y0, xb - xa, laneH);
     });
 
     if (ln.alarm !== undefined && ln.alarm > lo && ln.alarm < hi) {
@@ -449,7 +453,10 @@ function drawStrip(hist, now) {
 
     g.save(); g.beginPath(); g.rect(left, y0, W - left - right, laneH); g.clip();
     g.strokeStyle = cssv(ln.pen); g.lineWidth = 2.2; g.lineJoin = "round"; g.beginPath();
-    hist.forEach((h, j) => { const x = X(h.t), y = Y(h[ln.key]); j ? g.lineTo(x, y) : g.moveTo(x, y); });
+    hist.forEach((h, j) => {
+      const x = X(h.t), y = Math.max(y0 + 1, Y(h[ln.key]));     // clamp to the top edge
+      j ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
     g.stroke(); g.restore();
 
     // latest value, in the right gutter beside the end of the trace

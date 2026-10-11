@@ -78,7 +78,8 @@ def poller():
                         pending["detect_s"] = round(time.time() - pending["t"], 2)
                         pending["fault"] = s["fault"]
                         pending = None                         # caught: this drill is done
-                    elif not pending:
+                    elif not pending and s.get("source") == "live":
+                        # live only: in a replay the fault is part of the recording, not a false alarm
                         board["false_alarms"] += 1
                 last_status = s["status"]
         time.sleep(0.1)
@@ -299,6 +300,7 @@ def main():
     p.add_argument("--probe-speed", type=int, default=45, help="active-test speed %%")
     args = p.parse_args()
     MOTOR, PROBE_SPEED = args.motor, args.probe_speed
+    AGENT.unlink(missing_ok=True)                # fresh session: no diagnosis left over from last time
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, shutdown)
     threading.Thread(target=poller, daemon=True).start()
